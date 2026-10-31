@@ -461,9 +461,17 @@ oa_rank() {
 # or removed; its validate command reports such a document as having no
 # openapi field (openapi-required).
 oa_oasdiff_openapi() {
-    local out code=0
+    local out code=0 word load=()
+    # validate reads the documents before the comparison does, so it gets the
+    # comparison's --allow-external-refs: with false, neither fetches remote
+    # references.
+    for word in ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}; do
+        case "${word}" in
+            --allow-external-refs | --allow-external-refs=*) load+=("${word}") ;;
+        esac
+    done
     out=$(mktemp)
-    (cd "${OA_RUN_DIR:-.}" && "${OA_TOOL}" validate --format json -- "$2") > "${out}" 2> "${out}.err" || code=$?
+    (cd "${OA_RUN_DIR:-.}" && "${OA_TOOL}" validate --format json ${load[@]+"${load[@]}"} -- "$2") > "${out}" 2> "${out}.err" || code=$?
     if [[ "${code}" -ne 0 && "${code}" -ne 1 ]] || ! oa_json_is "${out}" 'type == "array"'; then
         cat "${out}.err" "${out}" 2> /dev/null | tail -n 20 | sed 's/^/  /' >&2
         rm -f "${out}" "${out}.err"

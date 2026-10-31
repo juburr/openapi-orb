@@ -317,7 +317,7 @@ vacuum runs once per document, as `spectral-report`. Reports: `<report_name>.jso
 | `composed` | `false` | Move external components into `components`, instead of inlining each where it's used |
 | `extra_args` | | Further options for `vacuum bundle`, such as `--remote=false` |
 
-vacuum looks for references from the document's directory. Its bundle must be an OpenAPI (or AsyncAPI) document whose every remaining `$ref` points inside it at something that is there, and vacuum must report no error (it leaves a file it can't open out of the bundle, and exits 0); otherwise nothing is written and the step fails.
+vacuum looks for references from the document's directory. Its bundle must be an OpenAPI (or AsyncAPI) document whose every remaining `$ref` points inside it at something that is there, and vacuum must report no error (it leaves a file it can't open out of the bundle, and exits 0); otherwise nothing is written and the step fails. A `$ref` inside an extension (an `x-` key) is data unless `extra_args` has `--ext-refs`, with which vacuum resolves those too.
 
 ### `openapi/breaking`
 

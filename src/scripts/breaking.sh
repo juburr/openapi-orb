@@ -280,9 +280,29 @@ for spec in "${SPECS[@]}"; do
         cat "${WORK}/one.md"
         printf '\n'
     } >> "${CHANGELOG}"
+    # The file oasdiff found each change in, which for a document split
+    # across files can be another one than spec: relative to the directory
+    # oasdiff ran in, as spec_file is, unless it is a URL or outside it.
+    sources='{}'
+    jq -r '[.[] | .revisionSource.file // empty | strings] | unique[]' "${WORK}/one.json" > "${WORK}/sources.txt"
+    while IFS= read -r source; do
+        if [[ -z "${source}" || "${source}" == *://* ]]; then
+            continue
+        fi
+        path=${source}
+        if [[ "${path}" != /* ]]; then
+            path="${OA_RUN_DIR}/${path}"
+        fi
+        path=$(realpath -ms --relative-to="${OA_RUN_DIR}" -- "${path}")
+        if [[ "${path}" != .. && "${path}" != ../* && "${path}" != /* ]]; then
+            # shellcheck disable=SC2016 # jq program, not shell
+            sources=$(jq -c --arg from "${source}" --arg to "${path}" '. + {($from): $to}' <<< "${sources}")
+        fi
+    done < "${WORK}/sources.txt"
     # shellcheck disable=SC2016 # jq program, not shell
-    jq --arg spec "${spec}" --arg file "${sarif_file}" \
-        '[.[] | . + {spec: $spec, spec_file: $file, level_name: ({"3": "error", "2": "warn", "1": "info"}[.level | tostring] // "info")}]' \
+    jq --arg spec "${spec}" --arg file "${sarif_file}" --argjson sources "${sources}" \
+        '[.[] | . + {spec: $spec, spec_file: $file, source_file: ((.revisionSource.file // "") as $f | $sources[$f]),
+                     level_name: ({"3": "error", "2": "warn", "1": "info"}[.level | tostring] // "info")}]' \
         "${WORK}/one.json" > "${WORK}/tagged.json"
     jq -s '.[0] + .[1]' "${WORK}/all.json" "${WORK}/tagged.json" > "${WORK}/next.json"
     mv "${WORK}/next.json" "${WORK}/all.json"
@@ -299,8 +319,9 @@ if [[ -n "${BASE_FILE}" ]] && git rev-parse --show-toplevel > /dev/null 2>&1; th
     PREFIX=$(git rev-parse --show-prefix)
 fi
 # Breaking changes only: an added operation isn't a problem to show. A
-# change is located where oasdiff found it in the new document, or, for a
-# removal, in the document as a whole.
+# change is located where oasdiff found it in the new document, in the file
+# it names, or, for a removal or a file SARIF can't name, at the document's
+# first line.
 # shellcheck disable=SC2016 # jq program, not shell
 jq --arg version "${VERSION}" --arg prefix "${PREFIX}" '
     def uri: ($prefix + ltrimstr("./")) | @uri | gsub("%2F"; "/");
@@ -315,10 +336,10 @@ jq --arg version "${VERSION}" --arg prefix "${PREFIX}" '
              level: (if .level >= 3 then "error" else "warning" end),
              message: {text: (.text + (if .operation then " (\(.operation) \(.path // ""))" else "" end))},
              partialFingerprints: (if .fingerprint then {"oasdiffFingerprint/v1": .fingerprint} else {} end),
-             locations: [{physicalLocation: ({artifactLocation: {uri: (.spec_file | uri)}}
-                 + (if (.revisionSource.line // 0) > 0
-                    then {region: {startLine: .revisionSource.line, startColumn: ([.revisionSource.column // 1, 1] | max)}}
-                    else {region: {startLine: 1}} end))}]}]}]}
+             locations: [{physicalLocation: (if (.revisionSource.line // 0) > 0 and .source_file != null
+                 then {artifactLocation: {uri: (.source_file | uri)},
+                       region: {startLine: .revisionSource.line, startColumn: ([.revisionSource.column // 1, 1] | max)}}
+                 else {artifactLocation: {uri: (.spec_file | uri)}, region: {startLine: 1}} end)}]}]}]}
 ' "${REPORT}" > "${SARIF}"
 
 # shellcheck disable=SC2016 # jq program, not shell

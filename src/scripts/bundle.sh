@@ -136,10 +136,26 @@ fi
 # Every $ref left must point inside the document, at something that is
 # there: a reference vacuum couldn't resolve stays as it was. A pointer is
 # followed key by key (~1 is /, ~0 is ~), an array index only into an array;
-# one with a percent-escape isn't decoded, and is only reported.
+# one with a percent-escape isn't decoded, and is only reported. vacuum
+# resolves references inside extensions only with --ext-refs, so without it
+# an x- key's value is data: an x- key is an extension unless it names a
+# property, a component, or an entry of another map keyed by names.
+EXT_REFS=false
+for word in ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}; do
+    case "${word}" in
+        --ext-refs | --ext-refs=true) EXT_REFS=true ;;
+        --ext-refs=*) EXT_REFS=false ;;
+    esac
+done
 # shellcheck disable=SC2016 # jq program, not shell
-if ! jq -r '. as $doc
-    | def found($parts): reduce $parts[] as $k ([true, $doc];
+if ! jq -r --argjson ext_refs "${EXT_REFS}" '. as $doc
+    | ["properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "schemas", "parameters",
+       "examples", "requestBodies", "headers", "securitySchemes", "links", "pathItems", "encoding", "webhooks"] as $named
+    | def named($p; $i): $i > 0
+          and (($p[$i - 1] as $k | any($named[]; . == $k)) or ($i > 1 and $p[$i - 2] == "components"));
+      def in_extension($p): any(range(0; $p | length); . as $i
+          | ($p[$i] | type == "string" and startswith("x-")) and (named($p; $i) | not));
+      def found($parts): reduce $parts[] as $k ([true, $doc];
         if .[0] | not then .
         else .[1] as $v
           | if ($v | type) == "object" then (if ($v | has($k)) then [true, $v[$k]] else [false, null] end)
@@ -147,7 +163,8 @@ if ! jq -r '. as $doc
               then [true, $v[$k | tonumber]]
             else [false, null] end
         end) | .[0];
-      [paths(type == "object" and has("$ref")) as $p | getpath($p)["$ref"] | select(type == "string")] | unique[]
+      [paths(type == "object" and has("$ref")) as $p | select($ext_refs or (in_extension($p) | not))
+          | getpath($p)["$ref"] | select(type == "string")] | unique[]
       | if startswith("#") | not then "unresolved \(.)"
         elif . == "#" then empty
         elif test("%") then "escaped \(.)"

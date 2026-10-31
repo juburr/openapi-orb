@@ -389,7 +389,19 @@ has() {
     local file
     file=$(call "$1" "$2") || return 1
     shift 2
-    grep -qzF -- "$(printf '%s\n' "$@")" "${file}"
+    # One argument per line; the arguments wanted, one per line too, must be
+    # consecutive lines. (grep -F would take each line as another pattern.)
+    WANT=$(printf '%s\n' "$@") awk '
+        BEGIN { n = split(ENVIRON["WANT"], want, "\n") }
+        { line[NR] = $0 }
+        END {
+            for (i = 1; i + n - 1 <= NR; i++) {
+                found = 1
+                for (j = 1; j <= n; j++) if (line[i + j - 1] != want[j]) { found = 0; break }
+                if (found) exit 0
+            }
+            exit 1
+        }' "${file}"
 }
 lacks() {
     local file
@@ -545,6 +557,30 @@ check "a bundle with references left unresolved fails" rc_is 1
 check "naming a file it couldn't inline" said "./schemas/tag.yaml"
 check "and a pointer to nothing" said "#/components/schemas/missing"
 check "writing no output" test ! -e "${JOB}/dist/left.yaml"
+# $refs inside extensions are data unless --ext-refs; x- names of properties
+# and components are not extensions.
+cat > "${WORK}/extensions.json" << 'JSON'
+{"openapi": "3.1.0", "info": {"title": "t", "version": "1", "x-customer-data": {"$ref": "customer-42"}},
+ "x-top": {"nested": {"$ref": "elsewhere.yaml"}},
+ "paths": {"x-paths-ext": {"$ref": "ext-path"}, "/a": {"get": {"responses": {"x-r": {"$ref": "ext-response"},
+   "200": {"$ref": "#/components/responses/x-ok"}}}}},
+ "components": {"x-comp": {"$ref": "ext-component"}, "responses": {"x-ok": {"description": "ok"}},
+   "schemas": {"x-thing": {"$ref": "missing.yaml"},
+     "S": {"type": "object", "properties": {"x-rate": {"$ref": "#/components/schemas/Gone"}}}}}}
+JSON
+run bundle spec=multi/openapi.yaml output=dist/left.yaml -- STUB_BUNDLE_JSON="${WORK}/extensions.json"
+check "references in x- names of components and properties are checked" rc_is 1
+check "a component named x-" said "missing.yaml"
+check "a property named x-" said "#/components/schemas/Gone"
+for data in customer-42 elsewhere.yaml ext-path ext-response ext-component; do
+    check "a \$ref in an extension is data ($data)" not_said "${data}"
+done
+jq 'del(.components.schemas)' "${WORK}/extensions.json" > "${WORK}/extensions-only.json"
+run bundle spec=multi/openapi.yaml output=dist/ext.yaml -- STUB_BUNDLE_JSON="${WORK}/extensions-only.json"
+check "a bundle whose only unresolved \$refs are in extensions passes" rc_is 0
+run bundle spec=multi/openapi.yaml output=dist/ext.yaml extra_args=--ext-refs -- STUB_BUNDLE_JSON="${WORK}/extensions-only.json"
+check "with --ext-refs, vacuum resolves extensions' references, so they are checked" rc_is 1
+check "naming them" said "customer-42"
 printf '{"title": "not a document"}\n' > "${WORK}/not-openapi.json"
 run bundle spec=multi/openapi.yaml output=dist/left.yaml -- STUB_BUNDLE_JSON="${WORK}/not-openapi.json"
 check "a bundle that isn't an OpenAPI document fails" rc_is 1
@@ -645,6 +681,15 @@ check "SARIF has the breaking changes alone" report_is breaking.sarif '.runs[0].
 check "ERR as error, WARN as warning" report_is breaking.sarif '[.runs[0].results[].level]' '["error","error","warning"]'
 check "where oasdiff found them in the new document" report_is breaking.sarif '.runs[0].results[1].locations[0].physicalLocation' '{"artifactLocation":{"uri":"openapi.yaml"},"region":{"startLine":106,"startColumn":9}}'
 check "a removal at the document's first line" report_is breaking.sarif '.runs[0].results[0].locations[0].physicalLocation.region' '{"startLine":1}'
+check "a change in a referenced file, in that file" report_is breaking.sarif '.runs[0].results[2].locations[0].physicalLocation' \
+    '{"artifactLocation":{"uri":"schemas/item.yaml"},"region":{"startLine":25,"startColumn":11}}'
+jq '.[1].revisionSource.file = "https://example.com/openapi.yaml" | .[2].revisionSource.file = "../outside.yaml"' \
+    "${STUBS}/oasdiff-changelog.json" > "${WORK}/changelog-elsewhere.json"
+run breaking report_only=true -- STUB_CHANGELOG="${WORK}/changelog-elsewhere.json"
+check "a change in a URL's document, at the document's first line" report_is breaking.sarif '.runs[0].results[1].locations[0].physicalLocation' \
+    '{"artifactLocation":{"uri":"openapi.yaml"},"region":{"startLine":1}}'
+check "and one outside the checkout" report_is breaking.sarif '.runs[0].results[2].locations[0].physicalLocation' \
+    '{"artifactLocation":{"uri":"openapi.yaml"},"region":{"startLine":1}}'
 check "with oasdiff's fingerprint" report_is breaking.sarif '.runs[0].results[0].partialFingerprints' '{"oasdiffFingerprint/v1":"a1b2c3d4e5f6"}'
 check "JUnit fails the ERR changes" bash -c '[[ "$(grep -o "<failure" "$1" | wc -l)" -eq 2 ]]' _ "${OUT}/junit/breaking.xml"
 printf 'api-removed-without-deprecation warn\n' > "${JOB}/levels.txt"
@@ -657,6 +702,10 @@ check "a policy file that doesn't exist fails" rc_is 1
 run breaking extra_args='--flatten-allof -p /items --deprecation-days-stable 30 --max-circular-dep 3'
 check "extra_args oasdiff takes" rc_is 0
 check "reach it" has oasdiff changelog --flatten-allof -p /items --deprecation-days-stable 30 --max-circular-dep 3 --
+run breaking extra_args='--allow-external-refs=false' -- STUB_CHANGELOG="${STUBS}/oasdiff-changelog-info.json"
+check "--allow-external-refs=false reaches the comparison" has oasdiff changelog --allow-external-refs=false --
+check "and the validation before it, which reads the documents first" has oasdiff validate --format json --allow-external-refs=false --
+check "for both documents" [ "$(grep -lx -- --allow-external-refs=false "${STUB}"/calls/*.args | xargs grep -lx validate | wc -l)" -eq 2 ]
 for words in --format=yaml '--level err' --fetch --open -o ERR --composed '--err-ignore x' openapi.yaml -p; do
     run breaking extra_args="${words}"
     check "extra_args '${words}' is refused" rc_is 1
@@ -715,6 +764,9 @@ run drift spec=openapi.yaml generated=generated.json extra_args='--match-path /i
 check "extra_args oasdiff takes, with their values" rc_is 0
 check "reach its diff" has oasdiff diff --match-path /items --max-circular-dep 3 -p /items --flatten-allof --
 check "and its changelog" has oasdiff changelog --match-path /items --max-circular-dep 3 -p /items --flatten-allof --
+run drift spec=openapi.yaml generated=generated.json extra_args=--allow-external-refs=false
+check "drift validates both documents with --allow-external-refs=false too" \
+    [ "$(grep -lx -- --allow-external-refs=false "${STUB}"/calls/*.args | xargs grep -lx validate | wc -l)" -eq 2 ]
 for words in --fail-on-diff --format=yaml -e examples other.yaml --match-path; do
     run drift spec=openapi.yaml generated=generated.json extra_args="${words}"
     check "extra_args '${words}' is refused" rc_is 1
