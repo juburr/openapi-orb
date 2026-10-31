@@ -1,0 +1,370 @@
+version: 2.1
+orbs:
+  # Your orb will be automatically injected here during the pipeline.
+  # Reference your orb's jobs and commands below as they will exist when built.
+  orb-tools: circleci/orb-tools@12.5
+  # The orb definition is intentionally not included here. It will be injected into the pipeline.
+  openapi-orb: {}
+
+# Use this tag to ensure test jobs always run,
+# even though the downstream publish job will only run on release tags.
+filters: &filters
+  tags:
+    only: /.*/
+
+# Filter for release tags.
+release-filters: &release-filters
+  branches:
+    ignore: /.*/
+  tags:
+    only: /^v[0-9]+\.[0-9]+\.[0-9]+$/
+
+commands:
+  # Checks every report under output_dir: SARIF against the OASIS SARIF 2.1.0 schema, pinned by
+  # SHA-256, JUnit's counts, and run records against schemas/run-record.v1.json.
+  validate-reports:
+    steps:
+      - run:
+          name: Validate the reports
+          command: bash tests/validate_reports.sh
+  # A git repository in /tmp/api with an origin: the fixture API on main, and a branch, change, on
+  # which openapi.yaml became the document named.
+  api-repository:
+    parameters:
+      document:
+        type: string
+    steps:
+      - run:
+          name: Make a git repository whose branch changes the API to << parameters.document >>
+          environment:
+            DOCUMENT: << parameters.document >>
+          command: |
+            fixtures="$(pwd)/tests/fixtures/api"
+            git config --global user.name ci
+            git config --global user.email ci@example.com
+            git init -q --bare /tmp/origin.git
+            git init -q /tmp/api
+            cd /tmp/api
+            git checkout -q -b main
+            cp "${fixtures}/openapi.yaml" openapi.yaml
+            git add openapi.yaml
+            git commit -qm "the API as clients use it"
+            git remote add origin /tmp/origin.git
+            git push -q origin main
+            git remote set-head origin main
+            git checkout -q -b change
+            cp "${fixtures}/${DOCUMENT}" openapi.yaml
+            git commit -qam "a change to the API"
+
+jobs:
+  # Every tool, with the default Python and the oldest the Schemathesis lock covers, on an image with
+  # no Python of its own the orb could use.
+  install-test:
+    parameters:
+      python:
+        type: string
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - openapi-orb/install:
+          tools: vacuum,oasdiff,schemathesis
+          python: << parameters.python >>
+      - run:
+          name: Check the installs
+          environment:
+            PYTHON: << parameters.python >>
+          command: |
+            set -x
+            bin="${HOME}/.openapi-orb/bin"
+            [[ "$(command -v vacuum)" == "${bin}/vacuum" ]]
+            [[ "$(cd / && vacuum version | sed 's/^v//')" == 0.35.1 ]]
+            oasdiff --version | grep -qx 'oasdiff version 1.34.1'
+            schemathesis --version | grep -q ' 4\.32\.4$'
+            # The binaries are the ones the checksum tables pin.
+            arch=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
+            for entry in vacuum:0.35.1 oasdiff:1.34.1; do
+                tool=${entry%%:*}
+                expected=$(grep -F "[\"${entry#*:}/${arch}\"]" "src/install/${tool}/install.sh" | cut -d'"' -f4)
+                [[ "$(sha512sum "${bin}/${tool}" | cut -d' ' -f1)" == "${expected}" ]]
+                jq -e '.verified == true' "${bin}/.${tool}.install.json"
+            done
+            jq -e --arg python "${PYTHON}" '.verified == true and (.python.version | startswith($python + "."))' \
+                "${bin}/.schemathesis.install.json"
+            # Schemathesis runs on its own environment's Python, isolated from the job's.
+            grep -q ' -I -m schemathesis.cli ' "${bin}/schemathesis"
+      # A second install takes the verified releases from the cache.
+      - openapi-orb/install:
+          tools: vacuum,oasdiff
+  # Versions the tables and locks don't list fail closed before anything is downloaded;
+  # known_versions installs them unverified.
+  checksum-test:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: Unlisted releases fail closed
+          command: |
+            for install in install_vacuum:0.29.0 install_oasdiff:1.29.1 install_uv:0.12.0; do
+                if bash tests/run_command.sh "${install%%:*}" "version=${install#*:}" > /tmp/install.log 2>&1; then
+                    cat /tmp/install.log
+                    echo "${install} was installed."
+                    exit 1
+                fi
+                cat /tmp/install.log
+                grep -q 'ERROR: ' /tmp/install.log
+            done
+      - openapi-orb/install_oasdiff:
+          version: 1.29.1
+          verify_checksums: known_versions
+          install_path: ~/unverified
+      - run:
+          name: known_versions installs it unverified
+          command: |
+            ~/unverified/oasdiff --version | grep -qx 'oasdiff version 1.29.1'
+            jq -e '.verified == false and .verify_checksums == "known_versions"' ~/unverified/.oasdiff.install.json
+  # Every tool on Arm, and a check with each.
+  arm64-test:
+    machine:
+      image: ubuntu-2404:current
+    resource_class: arm.medium
+    steps:
+      - checkout
+      - openapi-orb/install:
+          tools: vacuum,oasdiff,schemathesis
+      - openapi-orb/lint:
+          specs: tests/fixtures/api/openapi.yaml
+      - openapi-orb/drift:
+          spec: tests/fixtures/api/openapi.yaml
+          generated: tests/fixtures/api/openapi.json
+      - run:
+          name: Schemathesis runs
+          command: schemathesis --version
+  # lint and bundle with the real vacuum.
+  lint-test:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      # uv runs validate-reports' jsonschema, which cimg/base doesn't have.
+      - openapi-orb/install:
+          tools: vacuum,uv
+      - openapi-orb/lint:
+          specs: tests/fixtures/api/openapi.yaml
+          run_record: true
+      - run:
+          name: A document with errors fails lint
+          command: |
+            if bash tests/run_command.sh lint specs=tests/fixtures/lint/openapi.yaml output_dir=/tmp/lint-findings > /tmp/lint.log 2>&1; then
+                cat /tmp/lint.log
+                echo "lint passed a document with errors."
+                exit 1
+            fi
+            cat /tmp/lint.log
+            grep -q 'path-params' /tmp/lint.log
+            grep -q 'operation-operationId-unique' /tmp/lint.log
+            jq -e '[.[] | select(.severity_name == "error")] | length >= 2' /tmp/lint-findings/lint.json
+      - openapi-orb/lint:
+          specs: tests/fixtures/lint/openapi.yaml
+          hard_mode: true
+          fail_on: hint
+          report_only: true
+          run_record: true
+          report_name: lint-hard-mode
+      - run:
+          name: A file that isn't an OpenAPI document fails lint, report_only or not
+          command: |
+            if bash tests/run_command.sh lint specs=tests/fixtures/lint/not-openapi.yaml report_only=true \
+                output_dir=/tmp/lint-error > /tmp/lint.log 2>&1; then
+                cat /tmp/lint.log
+                echo "lint passed a file that isn't an OpenAPI document."
+                exit 1
+            fi
+            cat /tmp/lint.log
+            grep -q 'vacuum could not lint' /tmp/lint.log
+      - openapi-orb/bundle:
+          spec: tests/fixtures/multi/openapi.yaml
+          output: /tmp/bundled/openapi.yaml
+      - run:
+          name: The bundle has no references to other files
+          command: |
+            cat /tmp/bundled/openapi.yaml
+            ! grep -E 'ref: .*[.]yaml' /tmp/bundled/openapi.yaml
+      - openapi-orb/lint:
+          specs: /tmp/bundled/openapi.yaml
+          report_name: bundled
+      - run:
+          name: A reference to a file that isn't there fails bundle
+          command: |
+            if bash tests/run_command.sh bundle spec=tests/fixtures/multi-broken/openapi.yaml output=/tmp/broken.yaml > /tmp/bundle.log 2>&1; then
+                cat /tmp/bundle.log
+                echo "bundle passed a document with a reference it couldn't resolve."
+                exit 1
+            fi
+            cat /tmp/bundle.log
+            [[ ! -e /tmp/broken.yaml ]]
+      - validate-reports
+  # breaking and drift with the real oasdiff.
+  breaking-test:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      # uv runs validate-reports' jsonschema, which cimg/base doesn't have.
+      - openapi-orb/install:
+          tools: oasdiff,uv
+      - api-repository:
+          document: openapi-v2.yaml
+      - run:
+          name: A change that breaks clients fails breaking
+          command: |
+            if bash tests/run_command.sh breaking working_dir=/tmp/api output_dir=/tmp/breaking > /tmp/breaking.log 2>&1; then
+                cat /tmp/breaking.log
+                echo "breaking passed a change that removes an operation."
+                exit 1
+            fi
+            cat /tmp/breaking.log
+            jq -e 'any(.[]; .id == "api-removed-without-deprecation" and .operation == "DELETE")' /tmp/breaking/breaking.json
+            jq -e 'any(.[]; .level == 3 and (.text | test("sku")))' /tmp/breaking/breaking.json
+            jq -e 'any(.[]; .level == 1 and .path == "/health")' /tmp/breaking/breaking.json
+            grep -qxF '### DELETE /items/{id}' /tmp/breaking/breaking.md
+            grep -qF ':warning: api removed without deprecation' /tmp/breaking/breaking.md
+      - openapi-orb/breaking:
+          working_dir: /tmp/api
+          report_only: true
+          run_record: true
+      - run:
+          name: A change that breaks nothing passes, and a Swagger 2.0 document fails
+          command: |
+            cd /tmp/api
+            git checkout -q main
+            printf '# a comment\n' >> openapi.yaml
+            cd -
+            bash tests/run_command.sh breaking working_dir=/tmp/api output_dir=/tmp/clean
+            cp tests/fixtures/lint/swagger.yaml /tmp/api/swagger.yaml
+            git -C /tmp/api add swagger.yaml
+            git -C /tmp/api commit -qm swagger
+            if bash tests/run_command.sh breaking working_dir=/tmp/api specs=swagger.yaml base_ref=HEAD merge_base=false \
+                output_dir=/tmp/swagger > /tmp/swagger.log 2>&1; then
+                cat /tmp/swagger.log
+                echo "breaking compared a Swagger 2.0 document."
+                exit 1
+            fi
+            cat /tmp/swagger.log
+            grep -q 'is not an OpenAPI 3 document' /tmp/swagger.log
+            git -C /tmp/api checkout -q -- openapi.yaml
+            git -C /tmp/api checkout -q change
+      - openapi-orb/drift:
+          spec: tests/fixtures/api/openapi.yaml
+          generated: tests/fixtures/api/openapi.json
+          run_record: true
+      - run:
+          name: A generated document that differs is drift
+          command: |
+            if bash tests/run_command.sh drift spec=tests/fixtures/api/openapi.yaml generated=tests/fixtures/api/openapi-v2.yaml \
+                output_dir=/tmp/drift > /tmp/drift.log 2>&1; then
+                cat /tmp/drift.log
+                echo "drift passed documents that differ."
+                exit 1
+            fi
+            cat /tmp/drift.log
+            jq -e '.drift and (.changes | length) > 0' /tmp/drift/drift.json
+            # And a generator that wrote over the committed document.
+            cp tests/fixtures/api/openapi.json /tmp/api/openapi.yaml
+            if bash tests/run_command.sh drift working_dir=/tmp/api spec=openapi.yaml output_dir=/tmp/drift-head > /tmp/drift.log 2>&1; then
+                cat /tmp/drift.log
+                echo "drift passed a document that differs from HEAD's."
+                exit 1
+            fi
+            cat /tmp/drift.log
+            git -C /tmp/api checkout -q -- openapi.yaml
+      - validate-reports
+  # contract_test with the real Schemathesis, against the fixture API, then the same API with a bug.
+  contract-test:
+    docker:
+      - image: cimg/python:3.13
+    steps:
+      - checkout
+      - openapi-orb/install:
+          tools: schemathesis
+      - run:
+          name: Start the API
+          background: true
+          command: python3 tests/fixtures/server/app.py 8080
+      - run:
+          name: Start the API with a bug
+          background: true
+          command: BUG=1 python3 tests/fixtures/server/app.py 8081
+      - openapi-orb/contract_test:
+          spec: tests/fixtures/api/openapi.yaml
+          url: http://127.0.0.1:8080
+          checks: not_a_server_error,status_code_conformance,content_type_conformance,response_schema_conformance
+          max_examples: "25"
+          run_record: true
+      - run:
+          name: The API with a bug fails contract_test
+          command: |
+            if bash tests/run_command.sh contract_test spec=tests/fixtures/api/openapi.yaml url=http://127.0.0.1:8081 \
+                checks=response_schema_conformance max_examples=10 output_dir=/tmp/buggy > /tmp/contract.log 2>&1; then
+                cat /tmp/contract.log
+                echo "contract_test passed an API that doesn't match its document."
+                exit 1
+            fi
+            cat /tmp/contract.log
+            jq -e '.complete and (.failures | length) > 0' /tmp/buggy/contract-test.json
+      - run:
+          name: An API that isn't there fails contract_test, report_only or not
+          command: |
+            if bash tests/run_command.sh contract_test spec=tests/fixtures/api/openapi.yaml url=http://127.0.0.1:8099 \
+                wait_for_api=3 report_only=true output_dir=/tmp/absent > /tmp/contract.log 2>&1; then
+                cat /tmp/contract.log
+                echo "contract_test passed with no API to test."
+                exit 1
+            fi
+            cat /tmp/contract.log
+            grep -q 'did not answer within 3 seconds' /tmp/contract.log
+      - run:
+          name: Validate the run records
+          command: |
+            mkdir -p /tmp/records
+            cp /tmp/openapi-reports/*.run-record.json /tmp/records/
+            VALIDATE_KINDS=record bash tests/validate_reports.sh /tmp/records
+
+workflows:
+  test-deploy:
+    jobs:
+      # Make sure to include "filters: *filters" in every test job you want to run as part of your deployment.
+      - install-test:
+          matrix:
+            parameters:
+              python: ["3.11", "3.14"]
+          filters: *filters
+      - checksum-test:
+          filters: *filters
+      - arm64-test:
+          filters: *filters
+      - lint-test:
+          filters: *filters
+      - breaking-test:
+          filters: *filters
+      - contract-test:
+          filters: *filters
+      # The orb must be re-packed for publishing, and saved to the workspace.
+      - orb-tools/pack:
+          filters: *release-filters
+      - orb-tools/publish:
+          orb_name: juburr/openapi-orb
+          vcs_type: << pipeline.project.type >>
+          pub_type: production
+          # Ensure this job requires all test jobs and the pack job.
+          requires:
+            - orb-tools/pack
+            - install-test
+            - checksum-test
+            - arm64-test
+            - lint-test
+            - breaking-test
+            - contract-test
+          context: orb-publishing
+          filters: *release-filters

@@ -1,0 +1,27 @@
+description: >
+  Bundle an OpenAPI document split across files into one, lint the bundle,
+  and keep it as an artifact to publish.
+
+usage:
+  version: 2.1
+  orbs:
+    openapi: juburr/openapi-orb@0.1.0
+  jobs:
+    bundle:
+      docker:
+        - image: cimg/base:current
+      steps:
+        - checkout
+        - openapi/install:
+            tools: vacuum
+        - openapi/bundle:
+            spec: api/openapi.yaml
+            output: dist/openapi.yaml
+        - openapi/lint:
+            specs: dist/openapi.yaml
+        - store_artifacts:
+            path: dist/openapi.yaml
+  workflows:
+    bundle:
+      jobs:
+        - bundle

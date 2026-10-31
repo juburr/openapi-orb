@@ -1,0 +1,131 @@
+name: Lint OpenAPI documents with vacuum
+description: >
+  Lints OpenAPI documents with vacuum: whether each is a valid OpenAPI 2, 3.0,
+  3.1 or 3.2 document (vacuum's schema rules), then the rules of its recommended
+  ruleset, of a Spectral-compatible ruleset of your own, or with hard_mode every
+  built-in rule and the OWASP API security rules. Results at or above fail_on
+  fail the step unless report_only is true; a document vacuum couldn't read, or
+  a ruleset it couldn't load, fails it either way. Writes the results as JSON,
+  SARIF (for GitHub code scanning) and JUnit. Run the install action (tools:
+  vacuum) first. The GitHub Actions twin of the orb's lint command.
+author: juburr
+
+inputs:
+  working_dir:
+    description: >
+      The directory to run in. specs, ruleset, functions and ignore_file are
+      relative to it.
+    default: .
+  specs:
+    description: >
+      The documents to lint, separated by commas or spaces, each a path or a glob
+      relative to the working directory. Each must exist. Leave empty for the first
+      of openapi.yaml, openapi.yml, openapi.json, swagger.yaml, swagger.yml and
+      swagger.json in the working directory.
+    default: ""
+  ruleset:
+    description: >
+      A Spectral-compatible ruleset file (YAML, JSON or JavaScript), or an https://
+      URL of one, such as a .spectral.yaml that extends vacuum:oas or spectral:oas.
+      Leave empty for vacuum's recommended rules for the document's type. A ruleset
+      that leaves out the schema rules (oas3-schema, oas2-schema) no longer checks
+      the document's validity.
+    default: ""
+  hard_mode:
+    description: >
+      Every built-in OpenAPI rule, and the OWASP API security rules, instead of the
+      recommended ones; with ruleset, the OWASP rules are added to it.
+    default: "false"
+  functions:
+    description: >
+      A directory of custom JavaScript functions the ruleset uses.
+    default: ""
+  ignore_file:
+    description: >
+      A vacuum ignore file: YAML mapping rule IDs to the paths of the results to
+      leave out.
+    default: ""
+  fail_on:
+    description: >
+      The lowest severity that is a finding. Every result is reported.
+    default: error
+  extra_args:
+    description: >
+      Further options for vacuum, such as --base or --remote=false. They are split
+      like shell words, but nothing in them is expanded or run. Options the command
+      sets itself, and those that would narrow what is checked (--turbo,
+      --skip-check, --changes, --original), are refused.
+    default: ""
+  report_name:
+    description: >
+      The reports' file name without its extension: <report_name>.json (vacuum's
+      results, in Spectral's format, with the document each came from) and
+      <report_name>.sarif. Letters, digits, '.', '_' and '-'.
+    default: lint
+  output_dir:
+    description: >
+      Absolute path of the directory to write the reports into.
+    default: /tmp/openapi-reports
+  junit:
+    description: >
+      Write the findings as JUnit (output_dir/junit/<report_name>.xml).
+    default: "true"
+  run_record:
+    description: >
+      Also write a run record (<report_name>.run-record.json): what was checked,
+      with which tool and settings, and what it found.
+    default: "false"
+  report_only:
+    description: >
+      Report findings without failing the step, to adopt the check gradually. A
+      check that couldn't run, or that checked nothing, still fails it.
+    default: "false"
+  store_artifacts:
+    description: >
+      Upload output_dir as a workflow artifact named
+      openapi-reports-<report_name>-<random>, including when the step fails.
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    # Artifact names must be unique in a workflow run, and the same command
+    # can run in several jobs or matrix legs, so the name ends in a random
+    # suffix.
+    - name: Name the reports artifact
+      id: artifact
+      if: (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      shell: bash
+      env:
+        REPORT_NAME: ${{ inputs.report_name }}
+      run: |
+        if [[ ! "${REPORT_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            REPORT_NAME=reports
+        fi
+        printf 'name=openapi-reports-%s-%s\n' "${REPORT_NAME}" "$(od -An -tx1 -N4 /dev/urandom | tr -d ' \n')" >> "${GITHUB_OUTPUT}"
+    - name: vacuum
+      shell: bash
+      working-directory: ${{ inputs.working_dir }}
+      env:
+        PARAM_EXTRA_ARGS: ${{ inputs.extra_args }}
+        PARAM_FAIL_ON: ${{ inputs.fail_on }}
+        PARAM_FUNCTIONS: ${{ inputs.functions }}
+        PARAM_HARD_MODE: ${{ inputs.hard_mode }}
+        PARAM_IGNORE_FILE: ${{ inputs.ignore_file }}
+        PARAM_JUNIT: ${{ inputs.junit }}
+        PARAM_OUTPUT_DIR: ${{ inputs.output_dir }}
+        PARAM_REPORT_NAME: ${{ inputs.report_name }}
+        PARAM_REPORT_ONLY: ${{ inputs.report_only }}
+        PARAM_RULESET: ${{ inputs.ruleset }}
+        PARAM_RUN_RECORD: ${{ inputs.run_record }}
+        PARAM_SPECS: ${{ inputs.specs }}
+      run: >-
+        bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/lint.sh"
+        "SCRIPT_OPENAPI_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/openapi.sh"
+    - name: Upload the reports
+      if: always() && (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ steps.artifact.outputs.name }}
+        path: ${{ inputs.output_dir }}
+        if-no-files-found: ignore

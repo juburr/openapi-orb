@@ -1,0 +1,236 @@
+{
+  "components": {
+    "schemas": {
+      "Error": {
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "Item": {
+        "properties": {
+          "price": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "id": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "price"
+        ],
+        "type": "object"
+      },
+      "NewItem": {
+        "properties": {
+          "price": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "price"
+        ],
+        "additionalProperties": false,
+        "type": "object"
+      }
+    }
+  },
+  "paths": {
+    "/items/{id}": {
+      "delete": {
+        "responses": {
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "There is no such item."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The identifier is not a positive integer."
+          },
+          "204": {
+            "description": "The item was removed."
+          }
+        },
+        "tags": [
+          "items"
+        ],
+        "description": "Removes one item by its identifier.",
+        "summary": "Remove an item",
+        "operationId": "deleteItem"
+      },
+      "get": {
+        "responses": {
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "There is no such item."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The identifier is not a positive integer."
+          },
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Item"
+                }
+              }
+            },
+            "description": "The item."
+          }
+        },
+        "tags": [
+          "items"
+        ],
+        "description": "Gets one item by its identifier.",
+        "summary": "Get an item",
+        "operationId": "getItem"
+      },
+      "parameters": [
+        {
+          "schema": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "description": "The item's identifier.",
+          "required": true,
+          "in": "path",
+          "name": "id"
+        }
+      ]
+    },
+    "/items": {
+      "post": {
+        "responses": {
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request was not a valid item."
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Item"
+                }
+              }
+            },
+            "description": "The item added."
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewItem"
+              }
+            }
+          },
+          "required": true
+        },
+        "tags": [
+          "items"
+        ],
+        "description": "Adds an item to the inventory.",
+        "summary": "Add an item",
+        "operationId": "createItem"
+      },
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Item"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The items."
+          }
+        },
+        "tags": [
+          "items"
+        ],
+        "description": "Lists every item in stock.",
+        "summary": "List the items",
+        "operationId": "listItems"
+      }
+    }
+  },
+  "tags": [
+    {
+      "description": "Items in stock.",
+      "name": "items"
+    }
+  ],
+  "servers": [
+    {
+      "url": "http://localhost:8080"
+    }
+  ],
+  "info": {
+    "license": {
+      "identifier": "MIT",
+      "name": "MIT"
+    },
+    "contact": {
+      "url": "https://github.com/juburr/openapi-orb",
+      "name": "openapi-orb"
+    },
+    "version": "1.0.0",
+    "description": "A small inventory API that openapi-orb's tests check.",
+    "title": "Inventory"
+  },
+  "openapi": "3.1.0"
+}

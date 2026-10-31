@@ -1,0 +1,286 @@
+# Tests the GitHub Actions in actions/ on GitHub's own runners, as
+# .circleci/test-deploy.yml tests the orb's commands on CircleCI. Each job
+# runs the actions from this checkout (uses: ./actions/...), so a pull
+# request tests its own changes.
+name: GitHub Actions
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install jsonschema
+        run: python3 -m pip install --quiet --user jsonschema==4.26.0
+      - name: Run the offline tests
+        run: |
+          for test in tests/*_test.sh; do
+            echo "=== ${test}"
+            bash "${test}"
+          done
+
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./actions/install
+        with:
+          tools: vacuum,oasdiff,schemathesis
+      - name: Verify the installs are what the checksum tables and the lock pin
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          bin="${HOME}/.openapi-orb/bin"
+          for tool in vacuum oasdiff; do
+            version=$(grep -A3 '^  version:' "src/commands/install_${tool}.yml" | sed -n 's/^    default: "\(.*\)"$/\1/p')
+            [[ "$(command -v "${tool}")" == "${bin}/${tool}" ]]
+            expected=$(grep -F "[\"${version}/${ARCH}\"]" "src/install/${tool}/install.sh" | cut -d'"' -f4)
+            [[ "$(sha512sum "${bin}/${tool}" | cut -d' ' -f1)" == "${expected}" ]]
+          done
+          oasdiff --version | grep -q '^oasdiff version '
+          (cd / && vacuum version)
+          schemathesis --version
+          jq -e '.verified == true' "${bin}/.schemathesis.install.json"
+      # A second install takes the verified releases from the cache.
+      - uses: ./actions/install
+      - id: unlisted
+        uses: ./actions/install_vacuum
+        continue-on-error: true
+        with:
+          version: 0.29.0
+          install_path: ~/unlisted
+      - name: Verify an unlisted vacuum fails closed
+        env:
+          UNLISTED: ${{ steps.unlisted.outcome }}
+        run: |
+          [[ "${UNLISTED}" == "failure" ]]
+          [[ ! -e ~/unlisted/vacuum ]]
+
+  install-from-cache:
+    needs: install
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Block the download hosts
+        run: |
+          echo "127.0.0.1 github.com objects.githubusercontent.com release-assets.githubusercontent.com" | sudo tee -a /etc/hosts
+          if curl -sSf --max-time 10 -o /dev/null https://github.com; then
+            echo "github.com is still reachable."
+            exit 1
+          fi
+      - uses: ./actions/install
+      - name: Verify the installs
+        run: |
+          oasdiff --version
+          (cd / && vacuum version)
+
+  # install_hash.sh must print the table's entries for each default: for
+  # vacuum after a real cosign verifies the release's signed checksums.
+  install-hash:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: juburr/cosign-orb/actions/install@422b417ef8fdca894e242d49111f6711f08d0e74 # v1.1.0
+      - name: Generate the default versions' entries and compare them with the tables
+        run: |
+          for tool in vacuum oasdiff; do
+            version=$(grep -A3 '^  version:' "src/commands/install_${tool}.yml" | sed -n 's/^    default: "\(.*\)"$/\1/p')
+            bash "src/install/${tool}/install_hash.sh" -v "${version}" | tee "${RUNNER_TEMP}/entries"
+            [[ "$(wc -l < "${RUNNER_TEMP}/entries")" -eq 2 ]]
+            while IFS= read -r entry; do
+              grep -qxF -- "${entry}" "src/install/${tool}/install.sh"
+            done < "${RUNNER_TEMP}/entries"
+          done
+
+  # test-deploy.yml's lint-test: lint and bundle with the real vacuum.
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./actions/install
+        with:
+          tools: vacuum
+      - uses: ./actions/lint
+        with:
+          specs: tests/fixtures/api/openapi.yaml
+          run_record: "true"
+      - id: findings
+        uses: ./actions/lint
+        continue-on-error: true
+        with:
+          specs: tests/fixtures/lint/openapi.yaml
+          report_name: lint-findings
+          store_artifacts: "false"
+      - uses: ./actions/lint
+        with:
+          specs: tests/fixtures/lint/openapi.yaml
+          hard_mode: "true"
+          fail_on: hint
+          report_only: "true"
+          report_name: lint-hard-mode
+      - id: not-openapi
+        uses: ./actions/lint
+        continue-on-error: true
+        with:
+          specs: tests/fixtures/lint/not-openapi.yaml
+          report_only: "true"
+          report_name: lint-error
+          store_artifacts: "false"
+      - uses: ./actions/bundle
+        with:
+          spec: tests/fixtures/multi/openapi.yaml
+          output: /tmp/bundled/openapi.yaml
+      - id: broken
+        uses: ./actions/bundle
+        continue-on-error: true
+        with:
+          spec: tests/fixtures/multi-broken/openapi.yaml
+          output: /tmp/broken.yaml
+      - name: Check the outcomes
+        env:
+          FINDINGS: ${{ steps.findings.outcome }}
+          NOT_OPENAPI: ${{ steps.not-openapi.outcome }}
+          BROKEN: ${{ steps.broken.outcome }}
+        run: |
+          [[ "${FINDINGS}" == failure ]]
+          jq -e '[.[] | select(.severity_name == "error")] | length >= 2' /tmp/openapi-reports/lint-findings.json
+          [[ "${NOT_OPENAPI}" == failure ]]
+          [[ "${BROKEN}" == failure && ! -e /tmp/broken.yaml ]]
+          ! grep -E 'ref: .*[.]yaml' /tmp/bundled/openapi.yaml
+
+  # test-deploy.yml's breaking-test: breaking and drift with the real oasdiff.
+  breaking:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./actions/install
+        with:
+          tools: oasdiff
+      - name: Make a git repository whose branch breaks the API
+        run: |
+          fixtures="$(pwd)/tests/fixtures/api"
+          git config --global user.name ci
+          git config --global user.email ci@example.com
+          git init -q --bare /tmp/origin.git
+          git init -q /tmp/api
+          cd /tmp/api
+          git checkout -q -b main
+          cp "${fixtures}/openapi.yaml" openapi.yaml
+          git add openapi.yaml
+          git commit -qm "the API as clients use it"
+          git remote add origin /tmp/origin.git
+          git push -q origin main
+          git remote set-head origin main
+          git checkout -q -b change
+          cp "${fixtures}/openapi-v2.yaml" openapi.yaml
+          git commit -qam "a change to the API"
+      - id: breaking
+        uses: ./actions/breaking
+        continue-on-error: true
+        with:
+          working_dir: /tmp/api
+          store_artifacts: "false"
+      - uses: ./actions/breaking
+        with:
+          working_dir: /tmp/api
+          report_only: "true"
+          run_record: "true"
+          report_name: breaking-reported
+      - uses: ./actions/drift
+        with:
+          spec: tests/fixtures/api/openapi.yaml
+          generated: tests/fixtures/api/openapi.json
+          run_record: "true"
+      - id: drift
+        uses: ./actions/drift
+        continue-on-error: true
+        with:
+          spec: tests/fixtures/api/openapi.yaml
+          generated: tests/fixtures/api/openapi-v2.yaml
+          report_name: drift-found
+          store_artifacts: "false"
+      - name: Check the outcomes
+        env:
+          BREAKING: ${{ steps.breaking.outcome }}
+          DRIFT: ${{ steps.drift.outcome }}
+        run: |
+          [[ "${BREAKING}" == failure ]]
+          jq -e 'any(.[]; .id == "api-removed-without-deprecation")' /tmp/openapi-reports/breaking-reported.json
+          [[ "${DRIFT}" == failure ]]
+          jq -e '.drift' /tmp/openapi-reports/drift-found.json
+
+  # test-deploy.yml's contract-test: contract_test with the real
+  # Schemathesis, against the fixture API, then the same API with a bug.
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./actions/install
+        with:
+          tools: schemathesis
+      - name: Start the API, and the API with a bug
+        run: |
+          nohup python3 tests/fixtures/server/app.py 8080 > /tmp/api.log 2>&1 &
+          BUG=1 nohup python3 tests/fixtures/server/app.py 8081 > /tmp/buggy.log 2>&1 &
+      - uses: ./actions/contract_test
+        with:
+          spec: tests/fixtures/api/openapi.yaml
+          url: http://127.0.0.1:8080
+          checks: not_a_server_error,status_code_conformance,content_type_conformance,response_schema_conformance
+          max_examples: "25"
+          run_record: "true"
+      - id: buggy
+        uses: ./actions/contract_test
+        continue-on-error: true
+        with:
+          spec: tests/fixtures/api/openapi.yaml
+          url: http://127.0.0.1:8081
+          checks: response_schema_conformance
+          max_examples: "10"
+          report_name: buggy
+          store_artifacts: "false"
+      - name: Check the outcome
+        env:
+          BUGGY: ${{ steps.buggy.outcome }}
+        run: |
+          [[ "${BUGGY}" == failure ]]
+          jq -e '.complete and (.failures | length) > 0' /tmp/openapi-reports/buggy.json

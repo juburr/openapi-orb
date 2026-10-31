@@ -1,0 +1,134 @@
+description: >
+  Lints OpenAPI documents with vacuum: whether each is a valid OpenAPI 2, 3.0,
+  3.1 or 3.2 document (vacuum's schema rules), then the rules of its
+  recommended ruleset, of a Spectral-compatible ruleset of your own, or with
+  hard_mode every built-in rule and the OWASP API security rules. Results at
+  or above fail_on fail the step unless report_only is true; a document
+  vacuum couldn't read, or a ruleset it couldn't load, fails it either way.
+  Writes the results as JSON, SARIF (for GitHub code scanning) and JUnit.
+  Run install (tools: vacuum) first.
+parameters:
+  working_dir:
+    type: string
+    default: "."
+    description: The directory to run in. specs, ruleset, functions and ignore_file are relative to it.
+  specs:
+    type: string
+    default: ""
+    description: >
+      The documents to lint, separated by commas or spaces, each a path or a
+      glob relative to the working directory. Each must exist. Leave empty for
+      the first of openapi.yaml, openapi.yml, openapi.json, swagger.yaml,
+      swagger.yml and swagger.json in the working directory. Environment
+      variables are expanded.
+  ruleset:
+    type: string
+    default: ""
+    description: >
+      A Spectral-compatible ruleset file (YAML, JSON or JavaScript), or an
+      https:// URL of one, such as a .spectral.yaml that extends
+      vacuum:oas or spectral:oas. Leave empty for vacuum's recommended rules
+      for the document's type. A ruleset that leaves out the schema rules
+      (oas3-schema, oas2-schema) no longer checks the document's validity.
+      Environment variables are expanded.
+  hard_mode:
+    type: boolean
+    default: false
+    description: >
+      Every built-in OpenAPI rule, and the OWASP API security rules, instead
+      of the recommended ones; with ruleset, the OWASP rules are added to it.
+  functions:
+    type: string
+    default: ""
+    description: >
+      A directory of custom JavaScript functions the ruleset uses. Environment
+      variables are expanded.
+  ignore_file:
+    type: string
+    default: ""
+    description: >
+      A vacuum ignore file: YAML mapping rule IDs to the paths of the results
+      to leave out. Environment variables are expanded.
+  fail_on:
+    type: enum
+    enum: ["error", "warn", "info", "hint"]
+    default: error
+    description: The lowest severity that is a finding. Every result is reported.
+  extra_args:
+    type: string
+    default: ""
+    description: >
+      Further options for vacuum, such as --base or --remote=false. They are
+      split like shell words, but nothing in them is expanded or run. Options
+      the command sets itself, and those that would narrow what is checked
+      (--turbo, --skip-check, --changes, --original), are refused.
+      Environment variables are expanded.
+  report_name:
+    type: string
+    default: lint
+    description: >
+      The reports' file name without its extension: <report_name>.json
+      (vacuum's results, in Spectral's format, with the document each came
+      from) and <report_name>.sarif. Letters, digits, '.', '_' and '-'.
+  output_dir:
+    type: string
+    default: /tmp/openapi-reports
+    description: >
+      Absolute path of the directory to write the reports into. Environment
+      variables are not expanded, since the path is also passed to
+      store_artifacts and store_test_results.
+  junit:
+    type: boolean
+    default: true
+    description: >
+      Write the findings as JUnit (output_dir/junit/<report_name>.xml), and
+      store it with store_test_results for CircleCI's Tests tab.
+  run_record:
+    type: boolean
+    default: false
+    description: >
+      Also write a run record (<report_name>.run-record.json): what was
+      checked, with which tool and settings, and what it found.
+  report_only:
+    type: boolean
+    default: false
+    description: >
+      Report findings without failing the step, to adopt the check
+      gradually. A check that couldn't run, or that checked nothing, still
+      fails it.
+  store_artifacts:
+    type: boolean
+    default: true
+    description: Store output_dir as job artifacts under openapi-reports/, including when the step fails.
+steps:
+  - run:
+      name: vacuum (<< parameters.report_name >>)
+      working_directory: << parameters.working_dir >>
+      environment:
+        PARAM_EXTRA_ARGS: << parameters.extra_args >>
+        PARAM_FAIL_ON: << parameters.fail_on >>
+        PARAM_FUNCTIONS: << parameters.functions >>
+        PARAM_HARD_MODE: << parameters.hard_mode >>
+        PARAM_IGNORE_FILE: << parameters.ignore_file >>
+        PARAM_JUNIT: << parameters.junit >>
+        PARAM_OUTPUT_DIR: << parameters.output_dir >>
+        PARAM_REPORT_NAME: << parameters.report_name >>
+        PARAM_REPORT_ONLY: << parameters.report_only >>
+        PARAM_RULESET: << parameters.ruleset >>
+        PARAM_RUN_RECORD: << parameters.run_record >>
+        PARAM_SPECS: << parameters.specs >>
+        SCRIPT_OPENAPI_LIB: << include(scripts/lib/openapi.sh) >>
+      command: << include(scripts/lint.sh) >>
+  - when:
+      condition: << parameters.junit >>
+      steps:
+        - store_test_results:
+            path: << parameters.output_dir >>/junit/<< parameters.report_name >>.xml
+            when: always
+  - when:
+      condition: << parameters.store_artifacts >>
+      steps:
+        - store_artifacts:
+            path: << parameters.output_dir >>
+            destination: openapi-reports
+            when: always

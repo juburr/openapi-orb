@@ -1,0 +1,111 @@
+name: Check OpenAPI drift with oasdiff
+description: >
+  Checks that a committed OpenAPI document still describes the API the code
+  serves, with oasdiff: the document an earlier step generated from the code
+  (generated) against the committed one (spec), or, when the generator wrote
+  over the committed file, the working tree's copy against the one in HEAD. The
+  documents are compared as data, so key order, YAML or JSON and formatting
+  don't count; any other difference is drift, which fails the step unless
+  report_only is true. A document that isn't OpenAPI 3, or a comparison that
+  couldn't run, fails it either way. Any language works: the orb only reads the
+  documents. Run the install action (tools: oasdiff) first. The GitHub Actions
+  twin of the orb's drift command.
+author: juburr
+
+inputs:
+  working_dir:
+    description: >
+      The directory to run in. spec and generated are relative to it.
+    default: .
+  spec:
+    description: >
+      The committed document, such as openapi.yaml.
+    required: true
+  generated:
+    description: >
+      The document an earlier step generated from the code. Leave empty when that
+      step wrote over spec: the working tree's copy is then compared with the one in
+      HEAD.
+    default: ""
+  exclude_elements:
+    description: >
+      Differences that don't count, separated by commas or spaces: examples,
+      description, title, summary, extensions and endpoints.
+    default: ""
+  extra_args:
+    description: >
+      Further options for oasdiff's diff, such as --match-path or --flatten-allof.
+      They are split like shell words, but nothing in them is expanded or run.
+      Options the command sets itself are refused.
+    default: ""
+  report_name:
+    description: >
+      The reports' file name without its extension: <report_name>.json (the named
+      changes and oasdiff's full difference), <report_name>.diff.json (the
+      difference alone) and <report_name>.md (a changelog). Letters, digits, '.',
+      '_' and '-'.
+    default: drift
+  output_dir:
+    description: >
+      Absolute path of the directory to write the reports into.
+    default: /tmp/openapi-reports
+  junit:
+    description: >
+      Write the findings as JUnit (output_dir/junit/<report_name>.xml).
+    default: "true"
+  run_record:
+    description: >
+      Also write a run record (<report_name>.run-record.json): what was checked,
+      with which tool and settings, and what it found.
+    default: "false"
+  report_only:
+    description: >
+      Report findings without failing the step, to adopt the check gradually. A
+      check that couldn't run, or that checked nothing, still fails it.
+    default: "false"
+  store_artifacts:
+    description: >
+      Upload output_dir as a workflow artifact named
+      openapi-reports-<report_name>-<random>, including when the step fails.
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    # Artifact names must be unique in a workflow run, and the same command
+    # can run in several jobs or matrix legs, so the name ends in a random
+    # suffix.
+    - name: Name the reports artifact
+      id: artifact
+      if: (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      shell: bash
+      env:
+        REPORT_NAME: ${{ inputs.report_name }}
+      run: |
+        if [[ ! "${REPORT_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            REPORT_NAME=reports
+        fi
+        printf 'name=openapi-reports-%s-%s\n' "${REPORT_NAME}" "$(od -An -tx1 -N4 /dev/urandom | tr -d ' \n')" >> "${GITHUB_OUTPUT}"
+    - name: oasdiff
+      shell: bash
+      working-directory: ${{ inputs.working_dir }}
+      env:
+        PARAM_EXCLUDE_ELEMENTS: ${{ inputs.exclude_elements }}
+        PARAM_EXTRA_ARGS: ${{ inputs.extra_args }}
+        PARAM_GENERATED: ${{ inputs.generated }}
+        PARAM_JUNIT: ${{ inputs.junit }}
+        PARAM_OUTPUT_DIR: ${{ inputs.output_dir }}
+        PARAM_REPORT_NAME: ${{ inputs.report_name }}
+        PARAM_REPORT_ONLY: ${{ inputs.report_only }}
+        PARAM_RUN_RECORD: ${{ inputs.run_record }}
+        PARAM_SPEC: ${{ inputs.spec }}
+      run: >-
+        bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/drift.sh"
+        "SCRIPT_OPENAPI_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/openapi.sh"
+    - name: Upload the reports
+      if: always() && (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ steps.artifact.outputs.name }}
+        path: ${{ inputs.output_dir }}
+        if-no-files-found: ignore

@@ -1,0 +1,27 @@
+description: >
+  Check an API's OpenAPI document on every commit: that it is valid OpenAPI
+  and follows vacuum's recommended rules (lint), and that nothing in it breaks
+  the clients of the base branch's version (breaking), which oasdiff reads
+  from git. The breaking changes, and a changelog for the pull request, are
+  in the job's artifacts.
+
+usage:
+  version: 2.1
+  orbs:
+    openapi: juburr/openapi-orb@0.1.0
+  jobs:
+    openapi:
+      docker:
+        - image: cimg/base:current
+      steps:
+        - checkout
+        - openapi/install
+        - openapi/lint:
+            specs: api/openapi.yaml
+        - openapi/breaking:
+            specs: api/openapi.yaml
+            fail_on: warn
+  workflows:
+    openapi:
+      jobs:
+        - openapi

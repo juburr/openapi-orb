@@ -1,0 +1,2 @@
+name: a YAML file that isn't an OpenAPI document
+replicas: 3

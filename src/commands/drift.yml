@@ -1,0 +1,109 @@
+description: >
+  Checks that a committed OpenAPI document still describes the API the code
+  serves, with oasdiff: the document an earlier step generated from the code
+  (generated) against the committed one (spec), or, when the generator wrote
+  over the committed file, the working tree's copy against the one in HEAD.
+  The documents are compared as data, so key order, YAML or JSON and
+  formatting don't count; any other difference is drift, which fails the step
+  unless report_only is true. A document that isn't OpenAPI 3, or a
+  comparison that couldn't run, fails it either way. Any language works: the
+  orb only reads the documents. Run install (tools: oasdiff) first.
+parameters:
+  working_dir:
+    type: string
+    default: "."
+    description: The directory to run in. spec and generated are relative to it.
+  spec:
+    type: string
+    description: >
+      The committed document, such as openapi.yaml. Environment variables are
+      expanded.
+  generated:
+    type: string
+    default: ""
+    description: >
+      The document an earlier step generated from the code. Leave empty when
+      that step wrote over spec: the working tree's copy is then compared
+      with the one in HEAD. Environment variables are expanded.
+  exclude_elements:
+    type: string
+    default: ""
+    description: >
+      Differences that don't count, separated by commas or spaces: examples,
+      description, title, summary, extensions and endpoints. Environment
+      variables are expanded.
+  extra_args:
+    type: string
+    default: ""
+    description: >
+      Further options for oasdiff's diff, such as --match-path or
+      --flatten-allof. They are split like shell words, but nothing in them is
+      expanded or run. Options the command sets itself are refused.
+      Environment variables are expanded.
+  report_name:
+    type: string
+    default: drift
+    description: >
+      The reports' file name without its extension: <report_name>.json (the
+      named changes and oasdiff's full difference), <report_name>.diff.json
+      (the difference alone) and <report_name>.md (a changelog). Letters,
+      digits, '.', '_' and '-'.
+  output_dir:
+    type: string
+    default: /tmp/openapi-reports
+    description: >
+      Absolute path of the directory to write the reports into. Environment
+      variables are not expanded, since the path is also passed to
+      store_artifacts and store_test_results.
+  junit:
+    type: boolean
+    default: true
+    description: >
+      Write the findings as JUnit (output_dir/junit/<report_name>.xml), and
+      store it with store_test_results for CircleCI's Tests tab.
+  run_record:
+    type: boolean
+    default: false
+    description: >
+      Also write a run record (<report_name>.run-record.json): what was
+      checked, with which tool and settings, and what it found.
+  report_only:
+    type: boolean
+    default: false
+    description: >
+      Report findings without failing the step, to adopt the check
+      gradually. A check that couldn't run, or that checked nothing, still
+      fails it.
+  store_artifacts:
+    type: boolean
+    default: true
+    description: Store output_dir as job artifacts under openapi-reports/, including when the step fails.
+steps:
+  - run:
+      name: oasdiff (<< parameters.report_name >>)
+      working_directory: << parameters.working_dir >>
+      environment:
+        PARAM_EXCLUDE_ELEMENTS: << parameters.exclude_elements >>
+        PARAM_EXTRA_ARGS: << parameters.extra_args >>
+        PARAM_GENERATED: << parameters.generated >>
+        PARAM_JUNIT: << parameters.junit >>
+        PARAM_OUTPUT_DIR: << parameters.output_dir >>
+        PARAM_REPORT_NAME: << parameters.report_name >>
+        PARAM_REPORT_ONLY: << parameters.report_only >>
+        PARAM_RUN_RECORD: << parameters.run_record >>
+        PARAM_SPEC: << parameters.spec >>
+        SCRIPT_OPENAPI_LIB: << include(scripts/lib/openapi.sh) >>
+      command: << include(scripts/drift.sh) >>
+  - when:
+      condition: << parameters.junit >>
+      steps:
+        - store_test_results:
+            path: << parameters.output_dir >>/junit/<< parameters.report_name >>.xml
+            when: always
+  - when:
+      condition: << parameters.store_artifacts >>
+      steps:
+        - store_artifacts:
+            path: << parameters.output_dir >>
+            destination: openapi-reports
+            when: always

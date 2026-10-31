@@ -1,0 +1,10 @@
+swagger: "2.0"
+info:
+  title: A Swagger 2.0 document, which oasdiff doesn't compare
+  version: 1.0.0
+paths:
+  /items:
+    get:
+      responses:
+        "200":
+          description: The items.

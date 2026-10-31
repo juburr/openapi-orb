@@ -1,0 +1,3 @@
+[
+  {"id": "endpoint-added", "text": "endpoint added", "level": 1, "operation": "GET", "operationId": "health", "path": "/health", "section": "paths", "fingerprint": "d4e5f6a1b2c3"}
+]

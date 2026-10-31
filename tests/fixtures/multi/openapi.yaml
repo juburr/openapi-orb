@@ -1,0 +1,18 @@
+openapi: 3.1.0
+info:
+  title: Inventory, split across files
+  description: The inventory API, split across files for the bundle command's tests.
+  version: 1.0.0
+paths:
+  /items:
+    get:
+      operationId: listItems
+      responses:
+        "200":
+          description: The items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "./schemas/item.yaml"

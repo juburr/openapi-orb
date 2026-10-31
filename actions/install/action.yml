@@ -1,0 +1,270 @@
+name: Install the OpenAPI tools
+description: >
+  Installs the OpenAPI tools named in tools, through the install command for
+  each (install_vacuum, install_oasdiff, install_schemathesis), which can also
+  be used on their own. vacuum and oasdiff are release binaries verified against
+  this orb's checksum tables. Schemathesis is installed with uv, itself verified
+  against a checksum table, into an environment of its own on a CPython uv
+  checks against the SHA-256 it carries, from this orb's lock for the release,
+  which pins every file to its SHA-256. Run this before the orb's other
+  commands. The GitHub Actions twin of the orb's install command.
+author: juburr
+
+inputs:
+  tools:
+    description: >
+      The tools to install, separated by commas or spaces: any of vacuum (for lint
+      and bundle), oasdiff (for breaking and drift), schemathesis (for
+      contract_test, with uv and a Python) and uv. An unknown name fails the step.
+    default: "vacuum,oasdiff"
+  vacuum_version:
+    description: >
+      The vacuum release, when tools names it.
+    default: "0.35.1"
+  oasdiff_version:
+    description: >
+      The oasdiff release, when tools names it.
+    default: "1.34.1"
+  schemathesis_version:
+    description: >
+      The Schemathesis release, when tools names it.
+    default: "4.32.4"
+  uv_version:
+    description: >
+      The uv release, when tools names schemathesis or uv.
+    default: "0.13.6"
+  python:
+    description: >
+      The Python Schemathesis runs on: 3.11 to 3.14 for a CPython that uv downloads
+      and checks against the SHA-256 it carries for that build, "system" for the
+      python3 on the PATH, or an interpreter's absolute path.
+    default: "3.14"
+  index_url:
+    description: >
+      The package index to download Schemathesis from, such as a PyPI mirror: an
+      https:// URL, without credentials or a query or fragment. The lock's hashes
+      decide what is installed.
+    default: "https://pypi.org/simple"
+  python_install_mirror:
+    description: >
+      Base URL of a mirror of uv's Python downloads, https:// or file://. uv still
+      checks every download against the SHA-256 it carries.
+    default: ""
+  download_base_url:
+    description: >
+      Base URL of an internal mirror of GitHub releases to download vacuum, oasdiff
+      and uv from instead of https://github.com, such as an Artifactory or Nexus
+      remote repository: an https:// URL, without credentials or a query or
+      fragment.
+    default: ""
+  caching:
+    description: >
+      Cache the verified releases and the Python archive uv downloads between jobs.
+      Each is checked again whenever it is used. Installed environments and packages
+      are never cached.
+    default: "true"
+  install_path:
+    description: >
+      Absolute path of the directory to install the tools into. It is added to the
+      PATH of later steps when it isn't already on it. Defaults to
+      $HOME/.openapi-orb/bin.
+    default: ""
+  verify_checksums:
+    description: >
+      Verification of vacuum, oasdiff and uv against this orb's checksum tables, and
+      of Schemathesis against this orb's lock for its release. "strict" (default)
+      fails before downloading anything when a version has no checksum or lock.
+      "known_versions" installs unlisted versions unverified, with a warning.
+      "false" skips verification and is not recommended.
+    default: strict
+
+runs:
+  using: composite
+  steps:
+    - name: Check the tools to install
+      id: tools
+      shell: bash
+      env:
+        PARAM_TOOLS: ${{ inputs.tools }}
+      run: |
+        bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/install_tools.sh"
+        # The names, space-separated with a space on either side, for the
+        # if: conditions below.
+        read -r -a tools <<< "${PARAM_TOOLS//,/ }"
+        printf 'list= %s \n' "${tools[*]}" >> "${GITHUB_OUTPUT}"
+    # The key is computed from a file that names the CPU (uname -m), HOME (a
+    # cache is restored to the absolute path it was saved from) and the
+    # version, as the orb's command computes it.
+    - name: Prepare vacuum cache key
+      id: vacuum-cache-key
+      if: contains(steps.tools.outputs.list, ' vacuum ') && (inputs.caching == 'true' || inputs.caching == '1')
+      shell: bash
+      env:
+        ORB_CACHE_KEY_FILE: ${{ runner.temp }}/openapi-orb-vacuum-cache-key
+        PARAM_VERSION: ${{ inputs.vacuum_version }}
+      run: |
+        bash "${GITHUB_ACTION_PATH}/../../src/scripts/cache_key.sh"
+        # Bump the version in the key when an existing checksum table entry
+        # changes, so caches saved for the old bytes stop being restored.
+        printf 'key=openapi-orb-vacuum-v1-%s\n' "$(sha256sum < "${ORB_CACHE_KEY_FILE}" | cut -c1-64)" >> "${GITHUB_OUTPUT}"
+    - name: Restore the vacuum cache
+      id: vacuum-restore
+      if: contains(steps.tools.outputs.list, ' vacuum ') && (inputs.caching == 'true' || inputs.caching == '1')
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/openapi-orb-vacuum
+        key: ${{ steps.vacuum-cache-key.outputs.key }}
+    - name: Install vacuum
+      if: contains(steps.tools.outputs.list, ' vacuum ')
+      shell: bash
+      env:
+        PARAM_CACHING: ${{ inputs.caching }}
+        PARAM_DOWNLOAD_BASE_URL: ${{ inputs.download_base_url }}
+        PARAM_INSTALL_PATH: ${{ inputs.install_path }}
+        PARAM_VERIFY_CHECKSUMS: ${{ inputs.verify_checksums }}
+        PARAM_VERSION: ${{ inputs.vacuum_version }}
+      run: bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/install/vacuum/install.sh"
+    # A saved cache can't be replaced, so it is only saved when none was
+    # restored. Like the orb's save_cache, it is saved right after the
+    # install, not at the end of the job.
+    - name: Save the vacuum cache
+      if: >-
+        contains(steps.tools.outputs.list, ' vacuum ') && (inputs.caching == 'true' || inputs.caching == '1') &&
+        steps.vacuum-restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/openapi-orb-vacuum
+        key: ${{ steps.vacuum-cache-key.outputs.key }}
+    # The key is computed from a file that names the CPU (uname -m), HOME (a
+    # cache is restored to the absolute path it was saved from) and the
+    # version, as the orb's command computes it.
+    - name: Prepare oasdiff cache key
+      id: oasdiff-cache-key
+      if: contains(steps.tools.outputs.list, ' oasdiff ') && (inputs.caching == 'true' || inputs.caching == '1')
+      shell: bash
+      env:
+        ORB_CACHE_KEY_FILE: ${{ runner.temp }}/openapi-orb-oasdiff-cache-key
+        PARAM_VERSION: ${{ inputs.oasdiff_version }}
+      run: |
+        bash "${GITHUB_ACTION_PATH}/../../src/scripts/cache_key.sh"
+        # Bump the version in the key when an existing checksum table entry
+        # changes, so caches saved for the old bytes stop being restored.
+        printf 'key=openapi-orb-oasdiff-v1-%s\n' "$(sha256sum < "${ORB_CACHE_KEY_FILE}" | cut -c1-64)" >> "${GITHUB_OUTPUT}"
+    - name: Restore the oasdiff cache
+      id: oasdiff-restore
+      if: contains(steps.tools.outputs.list, ' oasdiff ') && (inputs.caching == 'true' || inputs.caching == '1')
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/openapi-orb-oasdiff
+        key: ${{ steps.oasdiff-cache-key.outputs.key }}
+    - name: Install oasdiff
+      if: contains(steps.tools.outputs.list, ' oasdiff ')
+      shell: bash
+      env:
+        PARAM_CACHING: ${{ inputs.caching }}
+        PARAM_DOWNLOAD_BASE_URL: ${{ inputs.download_base_url }}
+        PARAM_INSTALL_PATH: ${{ inputs.install_path }}
+        PARAM_VERIFY_CHECKSUMS: ${{ inputs.verify_checksums }}
+        PARAM_VERSION: ${{ inputs.oasdiff_version }}
+      run: bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/install/oasdiff/install.sh"
+    # A saved cache can't be replaced, so it is only saved when none was
+    # restored. Like the orb's save_cache, it is saved right after the
+    # install, not at the end of the job.
+    - name: Save the oasdiff cache
+      if: >-
+        contains(steps.tools.outputs.list, ' oasdiff ') && (inputs.caching == 'true' || inputs.caching == '1') &&
+        steps.oasdiff-restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/openapi-orb-oasdiff
+        key: ${{ steps.oasdiff-cache-key.outputs.key }}
+    # The key is computed from a file that names the CPU (uname -m), HOME (a
+    # cache is restored to the absolute path it was saved from) and the
+    # version, as the orb's command computes it.
+    - name: Prepare uv cache key
+      id: uv-cache-key
+      if: >-
+        (contains(steps.tools.outputs.list, ' uv ') || contains(steps.tools.outputs.list, ' schemathesis ')) &&
+        (inputs.caching == 'true' || inputs.caching == '1')
+      shell: bash
+      env:
+        ORB_CACHE_KEY_FILE: ${{ runner.temp }}/openapi-orb-uv-cache-key
+        PARAM_VERSION: ${{ inputs.uv_version }}
+      run: |
+        bash "${GITHUB_ACTION_PATH}/../../src/scripts/cache_key.sh"
+        # Bump the version in the key when an existing checksum table entry
+        # changes, so caches saved for the old bytes stop being restored.
+        printf 'key=openapi-orb-uv-v1-%s\n' "$(sha256sum < "${ORB_CACHE_KEY_FILE}" | cut -c1-64)" >> "${GITHUB_OUTPUT}"
+    - name: Restore the uv cache
+      id: uv-restore
+      if: >-
+        (contains(steps.tools.outputs.list, ' uv ') || contains(steps.tools.outputs.list, ' schemathesis ')) &&
+        (inputs.caching == 'true' || inputs.caching == '1')
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/openapi-orb-uv
+        key: ${{ steps.uv-cache-key.outputs.key }}
+    - name: Install uv
+      if: (contains(steps.tools.outputs.list, ' uv ') || contains(steps.tools.outputs.list, ' schemathesis '))
+      shell: bash
+      env:
+        PARAM_CACHING: ${{ inputs.caching }}
+        PARAM_DOWNLOAD_BASE_URL: ${{ inputs.download_base_url }}
+        PARAM_INSTALL_PATH: ${{ inputs.install_path }}
+        PARAM_VERIFY_CHECKSUMS: ${{ inputs.verify_checksums }}
+        PARAM_VERSION: ${{ inputs.uv_version }}
+      run: bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/install/uv/install.sh"
+    # A saved cache can't be replaced, so it is only saved when none was
+    # restored. Like the orb's save_cache, it is saved right after the
+    # install, not at the end of the job.
+    - name: Save the uv cache
+      if: >-
+        (contains(steps.tools.outputs.list, ' uv ') || contains(steps.tools.outputs.list, ' schemathesis ')) &&
+        (inputs.caching == 'true' || inputs.caching == '1') && steps.uv-restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/openapi-orb-uv
+        key: ${{ steps.uv-cache-key.outputs.key }}
+    # uv checks a cached Python archive against the SHA-256 it carries
+    # whenever it unpacks it, so the cache is never trusted on its own.
+    - name: Prepare Python cache key
+      id: python-cache-key
+      if: contains(steps.tools.outputs.list, ' schemathesis ') && (inputs.caching == 'true' || inputs.caching == '1')
+      shell: bash
+      env:
+        ORB_CACHE_KEY_FILE: ${{ runner.temp }}/openapi-orb-python-cache-key
+        PARAM_PYTHON: ${{ inputs.python }}
+        PARAM_UV_VERSION: ${{ inputs.uv_version }}
+      run: |
+        bash "${GITHUB_ACTION_PATH}/../../src/scripts/python_cache_key.sh"
+        printf 'key=openapi-orb-python-v1-%s\n' "$(sha256sum < "${ORB_CACHE_KEY_FILE}" | cut -c1-64)" >> "${GITHUB_OUTPUT}"
+    - name: Restore the Python cache
+      id: python-restore
+      if: contains(steps.tools.outputs.list, ' schemathesis ') && (inputs.caching == 'true' || inputs.caching == '1')
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/openapi-orb/python
+        key: ${{ steps.python-cache-key.outputs.key }}
+    - name: Install Schemathesis
+      if: contains(steps.tools.outputs.list, ' schemathesis ')
+      shell: bash
+      env:
+        PARAM_CACHING: ${{ inputs.caching }}
+        PARAM_INDEX_URL: ${{ inputs.index_url }}
+        PARAM_INSTALL_PATH: ${{ inputs.install_path }}
+        PARAM_PYTHON: ${{ inputs.python }}
+        PARAM_PYTHON_INSTALL_MIRROR: ${{ inputs.python_install_mirror }}
+        PARAM_TOOL: schemathesis
+        PARAM_VERIFY_CHECKSUMS: ${{ inputs.verify_checksums }}
+        PARAM_VERSION: ${{ inputs.schemathesis_version }}
+      run: >-
+        bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/install_tool.sh"
+        "SCRIPT_OPENAPI_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/openapi.sh" "SCRIPT_TOOL_LOCKS=${GITHUB_ACTION_PATH}/../../src/install/schemathesis/locks.txt"
+    - name: Save the Python cache
+      if: >-
+        contains(steps.tools.outputs.list, ' schemathesis ') && (inputs.caching == 'true' || inputs.caching == '1') &&
+        steps.python-restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/openapi-orb/python
+        key: ${{ steps.python-cache-key.outputs.key }}

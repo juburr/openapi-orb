@@ -1,0 +1,7 @@
+[
+  {"code": "path-params", "path": ["paths", "/things/{id}", "get"], "message": "operation must define parameter `{id}` as expected by path `/things/{id}`", "severity": 0, "range": {"start": {"line": 7, "character": 5}, "end": {"line": 7, "character": 5}}, "source": "SPEC"},
+  {"code": "operation-operationId-unique", "path": ["paths", "/things", "get", "operationId"], "message": "the `get` operation at path `/things` contains a duplicate operationId `makeThing`", "severity": 0, "range": {"start": {"line": 18, "character": 20}, "end": {"line": 18, "character": 29}}, "source": "SPEC"},
+  {"code": "operation-description", "path": ["paths", "/things/{id}", "post"], "message": "the `post` operation at path `/things/{id}` has no description", "severity": 1, "range": {"start": {"line": 11, "character": 5}, "end": {"line": 11, "character": 5}}, "source": "SPEC"},
+  {"code": "info-contact", "path": ["info"], "message": "info section is missing contact details", "severity": 2, "range": {"start": {"line": 2, "character": 1}, "end": {"line": 2, "character": 1}}, "source": "SPEC"},
+  {"code": "description-duplication", "path": ["info", "title"], "message": "a hint", "severity": 3, "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}}, "source": "SPEC"}
+]
