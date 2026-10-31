@@ -220,14 +220,19 @@ cp "${WORK}/all.json" "${REPORT}"
 # --- Reports ---
 RANKS='{"hint": 0, "info": 1, "warn": 2, "error": 3}'
 # SARIF paths are relative to the top of the git checkout, which is what
-# GitHub code scanning expects; outside a checkout, to the working directory.
-PREFIX=""
-if TOP=$(git rev-parse --show-toplevel 2> /dev/null) && [[ -n "${TOP}" ]]; then
-    PREFIX=$(git rev-parse --show-prefix)
-fi
+# GitHub code scanning expects (outside a checkout, to the working
+# directory), or absolute for a file outside it. vacuum names files as it
+# was given them, from the working directory; a result in a remote file is
+# located in the document.
+oa_sarif_root
+FILES=()
+jq -r '[.[] | .spec, (.source // empty | strings)] | unique[]' "${REPORT}" > "${WORK}/files.txt"
+while IFS= read -r file; do
+    FILES+=("${file}")
+done < "${WORK}/files.txt"
+PATHS=$(oa_sarif_paths "$(pwd -P)" ${FILES[@]+"${FILES[@]}"})
 # shellcheck disable=SC2016 # jq program, not shell
-jq --arg version "${VERSION}" --arg prefix "${PREFIX}" '
-    def uri: (if startswith("/") then . else $prefix + (ltrimstr("./")) end) | @uri | gsub("%2F"; "/");
+jq --arg version "${VERSION}" --argjson paths "${PATHS}" "${OA_SARIF_URI_JQ}"'
     def level: {"error": "error", "warn": "warning", "info": "note", "hint": "note"}[.severity_name] // "warning";
     ([.[].code] | unique) as $rules
     | {"$schema": "https://json.schemastore.org/sarif-2.1.0.json", version: "2.1.0",
@@ -238,7 +243,8 @@ jq --arg version "${VERSION}" --arg prefix "${PREFIX}" '
              ruleId: .code, ruleIndex: (.code as $c | $rules | index($c)), level: level,
              message: {text: .message},
              locations: [{physicalLocation: {
-                 artifactLocation: {uri: ((if (.source // "") == "" then .spec else .source end) | uri)},
+                 artifactLocation: {uri: ((.source // "" | if type == "string" then . else "" end) as $source
+                     | (if $paths[$source] == null then $paths[.spec] // .spec else $paths[$source] end) | uri)},
                  region: {startLine: ([.range.start.line, 1] | max), startColumn: ([.range.start.character, 1] | max)}}}]}]}]}
 ' "${REPORT}" > "${SARIF}"
 

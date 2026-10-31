@@ -189,6 +189,10 @@ else
         echo "The base is this commit, so only uncommitted changes can show."
     fi
 fi
+# SARIF names files from the top of the checkout, whichever directory oasdiff
+# ran in.
+oa_sarif_root
+RUN_DIR_PHYSICAL=$(cd "${OA_RUN_DIR}" && pwd -P)
 
 # record OUTCOME CODE: writes the run record when run_record is on.
 record() {
@@ -280,28 +284,21 @@ for spec in "${SPECS[@]}"; do
         cat "${WORK}/one.md"
         printf '\n'
     } >> "${CHANGELOG}"
-    # The file oasdiff found each change in, which for a document split
-    # across files can be another one than spec: relative to the directory
-    # oasdiff ran in, as spec_file is, unless it is a URL or outside it.
-    sources='{}'
+    # The document, and the file oasdiff found each change in, which for a
+    # document split across files can be another one, as SARIF names them.
+    # Both are relative to the directory oasdiff ran in, or absolute. A file
+    # outside the checkout, or a URL, has no source_file, so the change is
+    # located in the document.
+    found=()
     jq -r '[.[] | .revisionSource.file // empty | strings] | unique[]' "${WORK}/one.json" > "${WORK}/sources.txt"
     while IFS= read -r source; do
-        if [[ -z "${source}" || "${source}" == *://* ]]; then
-            continue
-        fi
-        path=${source}
-        if [[ "${path}" != /* ]]; then
-            path="${OA_RUN_DIR}/${path}"
-        fi
-        path=$(realpath -ms --relative-to="${OA_RUN_DIR}" -- "${path}")
-        if [[ "${path}" != .. && "${path}" != ../* && "${path}" != /* ]]; then
-            # shellcheck disable=SC2016 # jq program, not shell
-            sources=$(jq -c --arg from "${source}" --arg to "${path}" '. + {($from): $to}' <<< "${sources}")
-        fi
+        found+=("${source}")
     done < "${WORK}/sources.txt"
+    paths=$(oa_sarif_paths "${RUN_DIR_PHYSICAL}" "${sarif_file}" ${found[@]+"${found[@]}"})
     # shellcheck disable=SC2016 # jq program, not shell
-    jq --arg spec "${spec}" --arg file "${sarif_file}" --argjson sources "${sources}" \
-        '[.[] | . + {spec: $spec, spec_file: $file, source_file: ((.revisionSource.file // "") as $f | $sources[$f]),
+    jq --arg spec "${spec}" --arg file "${sarif_file}" --argjson paths "${paths}" \
+        '[.[] | . + {spec: $spec, spec_file: ($paths[$file] // $file),
+                     source_file: ((.revisionSource.file // "") as $f | $paths[$f] | if . != null and startswith("/") then null else . end),
                      level_name: ({"3": "error", "2": "warn", "1": "info"}[.level | tostring] // "info")}]' \
         "${WORK}/one.json" > "${WORK}/tagged.json"
     jq -s '.[0] + .[1]' "${WORK}/all.json" "${WORK}/tagged.json" > "${WORK}/next.json"
@@ -314,17 +311,12 @@ done
 cp "${WORK}/all.json" "${REPORT}"
 
 # --- Reports ---
-PREFIX=""
-if [[ -n "${BASE_FILE}" ]] && git rev-parse --show-toplevel > /dev/null 2>&1; then
-    PREFIX=$(git rev-parse --show-prefix)
-fi
 # Breaking changes only: an added operation isn't a problem to show. A
 # change is located where oasdiff found it in the new document, in the file
 # it names, or, for a removal or a file SARIF can't name, at the document's
 # first line.
 # shellcheck disable=SC2016 # jq program, not shell
-jq --arg version "${VERSION}" --arg prefix "${PREFIX}" '
-    def uri: ($prefix + ltrimstr("./")) | @uri | gsub("%2F"; "/");
+jq --arg version "${VERSION}" "${OA_SARIF_URI_JQ}"'
     [.[] | select(.level >= 2)] as $changes
     | ([$changes[].id] | unique) as $rules
     | {"$schema": "https://json.schemastore.org/sarif-2.1.0.json", version: "2.1.0",

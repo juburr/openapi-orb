@@ -490,6 +490,17 @@ run lint working_dir=lint specs=openapi.yaml -- STUB_VACUUM_REPORT="${STUBS}/vac
 check "from a directory below the top" rc_is 1
 check "SARIF paths stay relative to the top" report_is lint.sarif '.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri' '"lint/openapi.yaml"'
 check "while the report names the document as given" report_is lint.json '.[0].spec' '"openapi.yaml"'
+run lint working_dir=lint specs="$(cd "${JOB}" && pwd -P)/lint/openapi.yaml" -- STUB_VACUUM_REPORT="${STUBS}/vacuum-results.json"
+check "an absolute path below the top is named from the top too" report_is lint.sarif '.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri' '"lint/openapi.yaml"'
+run lint working_dir=lint specs=../openapi.yaml -- STUB_VACUUM_REPORT="${STUBS}/vacuum-results.json"
+check "and a path through .." report_is lint.sarif '.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri' '"openapi.yaml"'
+mkdir -p "${WORK}/lint-elsewhere"
+cp "${FIX}/lint/openapi.yaml" "${WORK}/lint-elsewhere/openapi.yaml"
+run lint specs="${WORK}/lint-elsewhere/openapi.yaml" -- STUB_VACUUM_REPORT="${STUBS}/vacuum-results.json"
+check "a document outside the checkout gets a file URI" report_is lint.sarif '.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri' \
+    "\"file://$(cd "${WORK}/lint-elsewhere" && pwd -P)/openapi.yaml\""
+run lint working_dir="${WORK}/lint-elsewhere" specs=openapi.yaml -- STUB_VACUUM_REPORT="${STUBS}/vacuum-results.json"
+check "outside a checkout, paths are the working directory's" report_is lint.sarif '.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri' '"openapi.yaml"'
 
 echo "=== lint: a run that can't complete"
 run lint report_only=true run_record=true -- STUB_VACUUM_EXIT=2
@@ -689,6 +700,25 @@ cp "${FIX}/api/openapi.yaml" "${WORK}/elsewhere/"
 run breaking working_dir="${WORK}/elsewhere"
 check "outside a git checkout, without base_file, fails" rc_is 1
 check "saying so" said "is not in a git checkout"
+cp "${FIX}/api/openapi.yaml" "${JOB}/services/orders/renamed.yaml"
+run breaking working_dir=services/orders specs="$(cd "${JOB}" && pwd -P)/services/orders/openapi.yaml" base_file=renamed.yaml \
+    report_only=true -- STUB_CHANGELOG="${STUBS}/oasdiff-changelog.json"
+check "with base_file, SARIF names an absolute document below the top from the top" report_is breaking.sarif \
+    '.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri' '"services/orders/openapi.yaml"'
+check "and a file oasdiff names from the working directory" report_is breaking.sarif \
+    '.runs[0].results[2].locations[0].physicalLocation.artifactLocation.uri' '"services/orders/schemas/item.yaml"'
+run breaking working_dir=services/orders specs=../../openapi.yaml base_file=renamed.yaml report_only=true \
+    -- STUB_CHANGELOG="${STUBS}/oasdiff-changelog.json"
+check "a document through .." report_is breaking.sarif '.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri' '"openapi.yaml"'
+run breaking working_dir=services/orders specs="${WORK}/elsewhere/openapi.yaml" base_file=renamed.yaml report_only=true \
+    -- STUB_CHANGELOG="${STUBS}/oasdiff-changelog.json"
+check "a document outside the checkout, by a file URI" report_is breaking.sarif \
+    '.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri' "\"file://$(cd "${WORK}/elsewhere" && pwd -P)/openapi.yaml\""
+cp "${FIX}/api/openapi.yaml" "${WORK}/elsewhere/renamed.yaml"
+run breaking working_dir="${WORK}/elsewhere" base_file=renamed.yaml report_only=true -- STUB_CHANGELOG="${STUBS}/oasdiff-changelog.json"
+check "outside a checkout, base_file works" rc_is 0
+check "with paths from the working directory" report_is breaking.sarif \
+    '[.runs[0].results[].locations[0].physicalLocation.artifactLocation.uri]' '["openapi.yaml","openapi.yaml","schemas/item.yaml"]'
 
 echo "=== breaking: the gate and the reports"
 run breaking fail_on=warn -- STUB_CHANGELOG="${STUBS}/oasdiff-changelog.json"

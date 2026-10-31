@@ -437,6 +437,52 @@ oa_from_top() {
     printf '%s\n' "${path}"
 }
 
+# oa_sarif_root: sets OA_SARIF_ROOT to the directory SARIF reports name
+# files from: the top of the git checkout the working directory is in, which
+# is what GitHub code scanning expects, or else the working directory, both
+# by their physical paths.
+oa_sarif_root() {
+    if ! OA_SARIF_ROOT=$(git rev-parse --show-toplevel 2> /dev/null) || [[ -z "${OA_SARIF_ROOT}" ]]; then
+        OA_SARIF_ROOT=$(pwd -P)
+    fi
+}
+
+# oa_sarif_paths DIR PATH...: prints a JSON object that maps each PATH, as a
+# tool wrote it (absolute, or relative to the directory DIR, a physical
+# path), to the path a SARIF report names it by: relative to OA_SARIF_ROOT,
+# or, for a file outside it, absolute. Symbolic links in PATH aren't
+# followed. Empty paths and URLs are left out.
+oa_sarif_paths() {
+    local dir=$1 path abs rel map='{}' paths=()
+    shift
+    # Bash 4.0 takes an empty "$@" for an unbound variable.
+    if [[ $# -gt 0 ]]; then
+        paths=("$@")
+    fi
+    for path in ${paths[@]+"${paths[@]}"}; do
+        if [[ -z "${path}" || "${path}" == *://* ]]; then
+            continue
+        fi
+        abs=${path}
+        if [[ "${abs}" != /* ]]; then
+            abs="${dir}/${abs}"
+        fi
+        rel=$(realpath -ms --relative-to="${OA_SARIF_ROOT}" -- "${abs}")
+        if [[ "${rel}" == .. || "${rel}" == ../* || "${rel}" == /* ]]; then
+            rel=$(realpath -ms -- "${abs}")
+        fi
+        # shellcheck disable=SC2016 # jq program, not shell
+        map=$(jq -c --arg from "${path}" --arg to "${rel}" '. + {($from): $to}' <<< "${map}")
+    done
+    printf '%s\n' "${map}"
+}
+
+# OA_SARIF_URI_JQ: a jq function, uri, that turns a path from
+# oa_sarif_paths into a SARIF artifact URI: percent-encoded but for its
+# slashes, and a file:// URI when the path is absolute.
+# shellcheck disable=SC2034 # read by the scripts that eval this file
+OA_SARIF_URI_JQ='def uri: (if startswith("/") then "file://" else "" end) + (@uri | gsub("%2F"; "/"));'
+
 # The long options of oasdiff's diff and changelog that take a value as the
 # next word, which a check of extra_args must not read as a document.
 # shellcheck disable=SC2034 # read by the scripts that eval this file

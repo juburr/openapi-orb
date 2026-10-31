@@ -220,7 +220,7 @@ Any language works: FastAPI, springdoc, NestJS, swag or utoipa can write the doc
 
 ### Upload SARIF to GitHub Code Scanning
 
-`lint` and `breaking` write `<report_name>.sarif` in `output_dir`, with paths relative to the top of the checkout. On GitHub Actions, upload them with `github/codeql-action/upload-sarif`.
+`lint` and `breaking` write `<report_name>.sarif` in `output_dir`, with paths relative to the top of the checkout, however the documents are named (a file outside the checkout gets a `file://` URI). On GitHub Actions, upload them with `github/codeql-action/upload-sarif`.
 
 ### Keep a Run Record
 
