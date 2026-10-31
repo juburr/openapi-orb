@@ -18,7 +18,7 @@ parameters:
       step.
   vacuum_version:
     type: string
-    default: "0.35.2"
+    default: "0.35.1"
     description: The vacuum release, when tools names it. Environment variables are expanded.
   oasdiff_version:
     type: string

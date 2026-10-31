@@ -106,6 +106,9 @@ fi
 ARGS+=(${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"})
 
 # bundle FORMAT FILE: bundles SPEC to FILE as FORMAT, or stops the step.
+# vacuum reports a reference it couldn't open with a "✗" line and still
+# exits 0, having left the reference out of the bundle, so those lines fail
+# the step too.
 bundle() {
     local code=0
     oa_show_command vacuum "${ARGS[@]}" --format "$1" -- "${SPEC}" "$2" | sed 's/^/  /'
@@ -114,6 +117,11 @@ bundle() {
     if [[ "${code}" -ne 0 || ! -s "$2" ]]; then
         oa_tail "${WORK}/vacuum.log" 30
         echo "ERROR: vacuum could not bundle ${SPEC} (exit code ${code})." >&2
+        exit 1
+    fi
+    if LC_ALL=C grep -qF '✗' "${WORK}/vacuum.log"; then
+        oa_tail "${WORK}/vacuum.log" 30
+        echo "ERROR: vacuum reported errors while bundling ${SPEC}, so the bundle is incomplete." >&2
         exit 1
     fi
 }

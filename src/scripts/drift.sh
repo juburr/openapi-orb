@@ -158,8 +158,8 @@ if ! oa_json_is "${DIFF}" 'type == "object"'; then
     exit 1
 fi
 # The changelog names the changes, with the same options as the diff.
-oasdiff_run changelog json "${WORK}/changelog.json" --level info --fetch=false --color never ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
-oasdiff_run changelog markdown "${WORK}/changelog.md" --level info --fetch=false --color never ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
+oasdiff_run changelog json "${WORK}/changelog.json" --level info --fetch=false ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
+oasdiff_run changelog markdown "${WORK}/changelog.md" --level info --fetch=false ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
 if ! oa_json_is "${WORK}/changelog.json" 'type == "array"'; then
     echo "ERROR: oasdiff's changelog is not a JSON list." >&2
     exit 1

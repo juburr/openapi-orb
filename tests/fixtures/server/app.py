@@ -42,7 +42,8 @@ class Handler(BaseHTTPRequestHandler):
         if allow:
             self.send_header("Allow", allow)
         self.end_headers()
-        self.wfile.write(data)
+        if self.command != "HEAD":
+            self.wfile.write(data)
 
     def body(self):
         length = int(self.headers.get("Content-Length") or 0)
@@ -118,11 +119,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
-    def do_PUT(self):
-        allow = "GET, POST" if self.path_only() == "/items" else "GET, DELETE"
-        return self.error(405, "method not allowed", allow=allow)
+    # Every other method, including TRACE, which Schemathesis sends to check
+    # that undocumented methods are refused: http.server would answer 501.
+    def not_allowed(self):
+        if self.path_only() == "/items":
+            return self.error(405, "method not allowed", allow="GET, POST")
+        if ITEM_PATH.match(self.path_only()):
+            return self.error(405, "method not allowed", allow="GET, DELETE")
+        return self.error(404, "no such path")
 
-    do_PATCH = do_PUT
+    do_PUT = do_PATCH = do_HEAD = do_OPTIONS = do_TRACE = do_CONNECT = not_allowed
 
 
 if __name__ == "__main__":

@@ -44,9 +44,9 @@ parameters:
       verification and is not recommended.
   version:
     type: string
-    default: "0.35.2"
+    default: "0.35.1"
     description: >
-      Version of vacuum to install, such as 0.35.2. A leading "v" is ignored, and
+      Version of vacuum to install, such as 0.35.1. A leading "v" is ignored, and
       environment variables are expanded.
 steps:
   - when:

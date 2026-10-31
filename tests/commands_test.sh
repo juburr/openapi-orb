@@ -140,12 +140,14 @@ EOF
 #   STUB_VACUUM_NO_REPORT  exit 0 without writing the report
 #   STUB_BUNDLE_JSON       the document bundle writes as JSON
 #   STUB_BUNDLE_EXIT       bundle's exit code
+#   STUB_BUNDLE_ERROR      bundle prints an error, as vacuum does for a
+#                          reference it can't open, and still exits 0
 cat > "${WORK}/bin/vacuum" << 'EOF'
 #!/usr/bin/env bash
 source "${STUB_RECORD}"
 case "$1" in
     version)
-        echo "0.35.2"
+        echo "0.35.1"
         exit 0
         ;;
     spectral-report)
@@ -165,6 +167,7 @@ case "$1" in
         ;;
     bundle)
         [[ -n "${STUB_BUNDLE_EXIT:-}" ]] && { echo "ERROR cannot read file"; exit "${STUB_BUNDLE_EXIT}"; }
+        [[ -n "${STUB_BUNDLE_ERROR:-}" ]] && echo "✗ unable to open the rolodex file 'missing.yaml': no such file or directory"
         out=$(positional | sed -n 2p)
         if [[ "$(opt format)" == json ]]; then
             cat "${STUB_BUNDLE_JSON:-/dev/null}" > "${out}"
@@ -181,9 +184,14 @@ EOF
 #   STUB_CHANGELOG        what changelog -f json prints (default [])
 #   STUB_CHANGELOG_EXIT   changelog's exit code, after an error
 #   STUB_DIFF             what diff -f json prints (default {})
+# Like oasdiff, it refuses --color with any format but text and singleline.
 cat > "${WORK}/bin/oasdiff" << 'EOF'
 #!/usr/bin/env bash
 source "${STUB_RECORD}"
+if opt color > /dev/null && [[ "$(opt format)" != text && "$(opt format)" != singleline ]]; then
+    echo "Error: --color flag is only relevant with 'text' or 'singleline' formats" >&2
+    exit 100
+fi
 case "$1" in
     --version)
         echo "oasdiff version 1.34.1"
@@ -418,7 +426,7 @@ check "with CI set, so it never checks for updates" meta vacuum spectral-report 
 check "no ruleset: vacuum's recommended rules" lacks vacuum spectral-report --ruleset
 check "the results are in lint.json" report_is lint.json 'length' 0
 check "the SARIF has no results" report_is lint.sarif '.runs[0].results | length' 0
-check "and names vacuum" report_is lint.sarif '.runs[0].tool.driver.name + " " + .runs[0].tool.driver.version' '"vacuum 0.35.2"'
+check "and names vacuum" report_is lint.sarif '.runs[0].tool.driver.name + " " + .runs[0].tool.driver.version' '"vacuum 0.35.1"'
 check "JUnit says the run passed" junit_has 'name="no findings"' lint
 check "the summary" said "Passed: vacuum reported 0 results in 1 document"
 
@@ -504,7 +512,7 @@ echo "=== lint: the run record"
 run lint specs=lint/openapi.yaml run_record=true ruleset=.vacuum.yaml -- STUB_VACUUM_REPORT="${STUBS}/vacuum-results.json"
 check "is written" report lint.run-record.json
 check "with the outcome" report_is lint.run-record.json '.outcome + " " + .command' '"findings lint"'
-check "the tool" report_is lint.run-record.json '.tool.name + " " + .tool.version' '"vacuum 0.35.2"'
+check "the tool" report_is lint.run-record.json '.tool.name + " " + .tool.version' '"vacuum 0.35.1"'
 check "its inputs" report_is lint.run-record.json '[.inputs[].role]' '["spec","ruleset"]'
 check "and the counts" report_is lint.run-record.json '.counts.findings' 2
 
@@ -537,6 +545,11 @@ check "saying so" said "is not an OpenAPI or AsyncAPI document"
 run bundle spec=multi/openapi.yaml output=dist/left.yaml -- STUB_BUNDLE_EXIT=2
 check "vacuum failing fails the step" rc_is 1
 check "with its output" said "cannot read file"
+run bundle spec=multi/openapi.yaml output=dist/left.yaml -- STUB_BUNDLE_JSON="${BUNDLED}" STUB_BUNDLE_ERROR=1
+check "an error vacuum reports with exit code 0 fails the step" rc_is 1
+check "with vacuum's error" said "unable to open the rolodex file"
+check "saying the bundle is incomplete" said "the bundle is incomplete"
+check "writing no output" test ! -e "${JOB}/dist/left.yaml"
 run bundle spec=multi/openapi.yaml output=multi/openapi.yaml
 check "output can't be the document itself" rc_is 1
 check "before vacuum runs" no_calls
@@ -551,7 +564,7 @@ check "breaking changes fail the step" rc_is 1
 check "compared with the merge base of origin/main, the remote's default branch" said "Comparing with origin/main (merge base ${BASE_COMMIT:0:12})."
 check "which oasdiff reads from git" has oasdiff changelog -- "${BASE_COMMIT}:openapi.yaml" openapi.yaml
 check "from the top of the checkout" meta oasdiff changelog "cwd=${JOB}"
-check "with every flag that decides what it reads" has oasdiff changelog --format json --level info --fetch=false --color never --
+check "with every flag that decides what it reads" has oasdiff changelog --format json --level info --fetch=false --
 check "both documents are checked to be OpenAPI 3 first" has oasdiff validate --format json -- "${BASE_COMMIT}:openapi.yaml"
 check "the summary" said "3 breaking changes since origin/main (merge base ${BASE_COMMIT:0:12}) in 1 document (2 error, 1 warn; 1 other changes); 2 findings at or above error."
 check "each is listed" said "openapi.yaml: error api-removed-without-deprecation: api removed without deprecation (DELETE /items/{id})"

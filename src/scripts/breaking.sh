@@ -223,7 +223,7 @@ record() {
 # step. Every flag that decides what is read is passed, so an .oasdiff.yaml
 # in the checkout (which can set the policy, such as severity-levels) can't
 # change the format, the level or fetching.
-CHANGELOG_ARGS=(--level info --fetch=false --color never ${POLICY[@]+"${POLICY[@]}"} ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"})
+CHANGELOG_ARGS=(--level info --fetch=false ${POLICY[@]+"${POLICY[@]}"} ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"})
 changelog() {
     local code=0
     (cd "${OA_RUN_DIR}" && "${OA_TOOL}" changelog --format "$1" "${CHANGELOG_ARGS[@]}" -- "$2" "$3") \

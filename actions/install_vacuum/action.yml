@@ -40,9 +40,9 @@ inputs:
     default: strict
   version:
     description: >
-      Version of vacuum to install, such as 0.35.2. A leading "v" is ignored, and
+      Version of vacuum to install, such as 0.35.1. A leading "v" is ignored, and
       environment variables are expanded.
-    default: "0.35.2"
+    default: "0.35.1"
 
 runs:
   using: composite

@@ -20,7 +20,7 @@ inputs:
   vacuum_version:
     description: >
       The vacuum release, when tools names it.
-    default: "0.35.2"
+    default: "0.35.1"
   oasdiff_version:
     description: >
       The oasdiff release, when tools names it.

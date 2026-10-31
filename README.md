@@ -71,7 +71,7 @@ Findings fail the step unless <code>report_only</code> is true. A tool that cras
 | A `vacuum.conf.yaml` with `turbo: true` | the schema rules silently stop running | never read: the parameters decide |
 | Comparing with the base branch | a second checkout, and a script to find the base | oasdiff reads it from git; the merge base by default |
 | A Swagger 2.0 or non-OpenAPI file | oasdiff loads it as an empty document, and finds no breaking change | fails, saying so |
-| A partial bundle | vacuum writes it, and exits 0 | every reference must resolve, or nothing is written |
+| A partial bundle | vacuum writes it, and exits 0, even for a file it couldn't open | every reference must resolve and vacuum must report no error, or nothing is written |
 | A contract test the API never answered | exit code 1, the same as a failed check | no verdict, whatever `report_only` says |
 | An auth token for the contract test | on the command line | a `${NAME}` placeholder Schemathesis fills in from the environment |
 
@@ -259,7 +259,7 @@ Every parameter that names a value expands environment variables, except `output
 | Parameter | Default | Description |
 |---|---|---|
 | `tools` | `vacuum,oasdiff` | Any of `vacuum`, `oasdiff`, `schemathesis` and `uv`, separated by commas or spaces |
-| `vacuum_version` | `0.35.2` | The vacuum release |
+| `vacuum_version` | `0.35.1` | The vacuum release |
 | `oasdiff_version` | `1.34.1` | The oasdiff release |
 | `schemathesis_version` | `4.32.4` | The Schemathesis release |
 | `uv_version` | `0.13.6` | The uv release, for Schemathesis |
@@ -275,7 +275,7 @@ Every parameter that names a value expands environment variables, except `output
 
 | Parameter | Default | Description |
 |---|---|---|
-| `version` | `0.35.2` | The vacuum release, from 0.30.0 |
+| `version` | `0.35.1` | The vacuum release, from 0.30.0 |
 | `verify_checksums` | `strict` | `strict`, `known_versions` or `false` |
 | `install_path` | `~/.openapi-orb/bin` | Directory for `vacuum`, added to the `PATH` |
 | `download_base_url` | | An https mirror of GitHub Releases |
@@ -317,7 +317,7 @@ vacuum runs once per document, as `spectral-report`. Reports: `<report_name>.jso
 | `composed` | `false` | Move external components into `components`, instead of inlining each where it's used |
 | `extra_args` | | Further options for `vacuum bundle`, such as `--remote=false` |
 
-vacuum looks for references from the document's directory. Its bundle must be an OpenAPI (or AsyncAPI) document whose every remaining `$ref` points inside it at something that is there; otherwise nothing is written and the step fails.
+vacuum looks for references from the document's directory. Its bundle must be an OpenAPI (or AsyncAPI) document whose every remaining `$ref` points inside it at something that is there, and vacuum must report no error (it leaves a file it can't open out of the bundle, and exits 0); otherwise nothing is written and the step fails.
 
 ### `openapi/breaking`
 
@@ -413,7 +413,7 @@ What one action exports, later steps see, as with CircleCI's `BASH_ENV`. A few d
 
 ## 🔐 Checksum Verification
 
-**vacuum.** `src/install/vacuum/install.sh` holds the SHA-512 of the `vacuum` binary in the release archives of every vacuum release from **0.30.0 to 0.35.2**. `src/install/vacuum/install_hash.sh -v <version>` prints new entries after cosign verifies the release's Sigstore-signed `checksums.txt`, as signed by vacuum's publish workflow for the commit the tag names, and the archive against it.
+**vacuum.** `src/install/vacuum/install.sh` holds the SHA-512 of the `vacuum` binary in the release archives of every vacuum release from **0.30.0 to 0.35.1**. `src/install/vacuum/install_hash.sh -v <version>` prints new entries after cosign verifies the release's Sigstore-signed `checksums.txt`, as signed by vacuum's publish workflow for the commit the tag names, and the archive against it.
 
 **oasdiff.** `src/install/oasdiff/install.sh` holds the SHA-512 of the `oasdiff` binary for every release from **1.30.0 to 1.34.1**. oasdiff signs nothing, so `src/install/oasdiff/install_hash.sh -v <version>` anchors each entry to the release's `checksums.txt`.
 
