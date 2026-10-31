@@ -316,12 +316,18 @@ if [[ ! -s "${WORK}/report.json" ]] || ! oa_json_is "${WORK}/report.json" 'type 
     exit 1
 fi
 cp "${WORK}/report.json" "${REPORT}"
+# The seed as the report writes it: jq 1.6 reads numbers as doubles, which
+# round a 128-bit seed, so it is taken from the text, the "seed" whose value
+# is the report's seed.
 # shellcheck disable=SC2016 # jq program, not shell
-COUNTS=$(jq -c '{
+RUN_SEED=$(jq -r -R -s --slurpfile report "${REPORT}" \
+    '[scan("\"seed\"\\s*:\\s*([0-9]+)")[0] | select(tonumber == $report[0].seed)] | first // empty' "${REPORT}")
+# shellcheck disable=SC2016 # jq program, not shell
+COUNTS=$(jq -c --arg seed "${RUN_SEED}" '{
     operations_tested: (.operations.tested // 0), operations_selected: (.operations.selected // 0),
     test_cases: (.test_cases.generated // 0), failures: ([.failures[]?.count] | add // 0),
-    failure_kinds: (.failures | length), errors: ([.errors[]?.count] | add // 0), seed: .seed,
-    stop_reason: .stop_reason}' "${REPORT}")
+    failure_kinds: (.failures | length), errors: ([.errors[]?.count] | add // 0),
+    seed: (if $seed == "" then null else $seed end), stop_reason: .stop_reason}' "${REPORT}")
 # shellcheck disable=SC2034 # read by oa_run_record
 OA_COUNTS=${COUNTS}
 if [[ "${CODE}" -ne 0 && "${CODE}" -ne 1 ]]; then

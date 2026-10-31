@@ -581,6 +581,27 @@ check "a bundle whose only unresolved \$refs are in extensions passes" rc_is 0
 run bundle spec=multi/openapi.yaml output=dist/ext.yaml extra_args=--ext-refs -- STUB_BUNDLE_JSON="${WORK}/extensions-only.json"
 check "with --ext-refs, vacuum resolves extensions' references, so they are checked" rc_is 1
 check "naming them" said "customer-42"
+# Literal values are data too; Reference Objects beside them are checked.
+cat > "${WORK}/literals.json" << 'JSON'
+{"openapi": "3.1.0", "info": {"title": "t", "version": "1"},
+ "paths": {"/a": {"post": {
+   "requestBody": {"content": {"application/json": {
+     "schema": {"type": "object", "example": {"$ref": "lit-example"}, "default": {"$ref": "lit-default"},
+       "enum": [{"$ref": "lit-enum"}], "const": {"$ref": "lit-const"}, "examples": [{"$ref": "lit-examples"}],
+       "properties": {"example": {"$ref": "#/components/schemas/GoneProperty"}}},
+     "examples": {"sample": {"value": {"payload": {"$ref": "lit-value"}}},
+                  "reused": {"$ref": "#/components/examples/GoneExample"}}}}},
+   "responses": {"default": {"$ref": "#/components/responses/GoneResponse"}}}}},
+ "components": {"examples": {"shared": {"value": {"$ref": "lit-component-value"}}}}}
+JSON
+run bundle spec=multi/openapi.yaml output=dist/left.yaml -- STUB_BUNDLE_JSON="${WORK}/literals.json"
+check "references beside literal values are checked" rc_is 1
+check "a property named example" said "#/components/schemas/GoneProperty"
+check "a reference to a reusable example" said "#/components/examples/GoneExample"
+check "a Responses Object's default" said "#/components/responses/GoneResponse"
+for data in lit-example lit-default lit-enum lit-const lit-examples lit-value lit-component-value; do
+    check "a \$ref in a literal value is data ($data)" not_said "${data}"
+done
 printf '{"title": "not a document"}\n' > "${WORK}/not-openapi.json"
 run bundle spec=multi/openapi.yaml output=dist/left.yaml -- STUB_BUNDLE_JSON="${WORK}/not-openapi.json"
 check "a bundle that isn't an OpenAPI document fails" rc_is 1
@@ -777,6 +798,10 @@ echo "=== contract_test: the run"
 run contract_test spec=openapi.yaml url=http://localhost:8080 wait_for_api=0 -- SCHEMATHESIS_HOOKS=evil.hooks SCHEMATHESIS_BASE_URL=http://evil.example
 check "an API that passes every check passes" rc_is 0
 check "the summary" said "Schemathesis tested 4 operations with 240 test cases (seed 12345): 0 kinds of failure, 0 failures."
+jq '.seed = 0' "${STUBS}/st-pass.json" | sed 's/"seed": 0/"seed": 82422991785393504163937752414868088611/' > "${WORK}/st-seed.json"
+run contract_test spec=openapi.yaml url=http://localhost:8080 wait_for_api=0 run_record=true -- STUB_ST_REPORT="${WORK}/st-seed.json"
+check "a 128-bit seed is named as Schemathesis wrote it, not rounded" said "(seed 82422991785393504163937752414868088611)"
+check "in the run record too" report_is contract-test.run-record.json '.counts.seed' '"82422991785393504163937752414868088611"'
 check "Schemathesis runs with the orb's configuration" bash -c 'grep -A1 -x -- --config-file "$1" | tail -n 1 | grep -q "/schemathesis.toml$"' _ "$(call schemathesis --config-file)"
 check "and the document and URL" has schemathesis --config-file --no-color run openapi.yaml --generation-database none
 check "the URL" has schemathesis --config-file --url http://localhost:8080

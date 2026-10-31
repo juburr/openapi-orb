@@ -136,10 +136,13 @@ fi
 # Every $ref left must point inside the document, at something that is
 # there: a reference vacuum couldn't resolve stays as it was. A pointer is
 # followed key by key (~1 is /, ~0 is ~), an array index only into an array;
-# one with a percent-escape isn't decoded, and is only reported. vacuum
-# resolves references inside extensions only with --ext-refs, so without it
-# an x- key's value is data: an x- key is an extension unless it names a
-# property, a component, or an entry of another map keyed by names.
+# one with a percent-escape isn't decoded, and is only reported. Literal
+# values are data, not references: an Example Object's value, and example,
+# examples (an array), enum, const and default (but a Responses Object's
+# default is a response). An extension's value (an x- key) is data too,
+# unless extra_args has --ext-refs, with which vacuum resolves references
+# there. A key is none of these when it names a property, a component, or
+# an entry of another map keyed by names.
 EXT_REFS=false
 for word in ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}; do
     case "${word}" in
@@ -153,8 +156,15 @@ if ! jq -r --argjson ext_refs "${EXT_REFS}" '. as $doc
        "examples", "requestBodies", "headers", "securitySchemes", "links", "pathItems", "encoding", "webhooks"] as $named
     | def named($p; $i): $i > 0
           and (($p[$i - 1] as $k | any($named[]; . == $k)) or ($i > 1 and $p[$i - 2] == "components"));
+      def keyword($p; $i): ($p[$i] | type == "string") and (named($p; $i) | not);
+      def literal($p): any(range(0; $p | length); . as $i | keyword($p; $i) and (
+          ($p[$i] | IN("example", "enum", "const"))
+          or ($p[$i] == "default" and ($i == 0 or $p[$i - 1] != "responses"))
+          or ($p[$i] == "examples" and ($p[$i + 1] | type) == "number")
+          or ($p[$i] == "value" and $i > 1 and ($p[$i - 1] | type) == "string" and $p[$i - 2] == "examples"
+              and keyword($p; $i - 2))));
       def in_extension($p): any(range(0; $p | length); . as $i
-          | ($p[$i] | type == "string" and startswith("x-")) and (named($p; $i) | not));
+          | keyword($p; $i) and ($p[$i] | startswith("x-")));
       def found($parts): reduce $parts[] as $k ([true, $doc];
         if .[0] | not then .
         else .[1] as $v
@@ -163,7 +173,7 @@ if ! jq -r --argjson ext_refs "${EXT_REFS}" '. as $doc
               then [true, $v[$k | tonumber]]
             else [false, null] end
         end) | .[0];
-      [paths(type == "object" and has("$ref")) as $p | select($ext_refs or (in_extension($p) | not))
+      [paths(type == "object" and has("$ref")) as $p | select((literal($p) | not) and ($ext_refs or (in_extension($p) | not)))
           | getpath($p)["$ref"] | select(type == "string")] | unique[]
       | if startswith("#") | not then "unresolved \(.)"
         elif . == "#" then empty
