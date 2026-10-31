@@ -119,8 +119,6 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
-    # Every other method, including TRACE, which Schemathesis sends to check
-    # that undocumented methods are refused: http.server would answer 501.
     def not_allowed(self):
         if self.path_only() == "/items":
             return self.error(405, "method not allowed", allow="GET, POST")
@@ -128,7 +126,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.error(405, "method not allowed", allow="GET, DELETE")
         return self.error(404, "no such path")
 
-    do_PUT = do_PATCH = do_HEAD = do_OPTIONS = do_TRACE = do_CONNECT = not_allowed
+    # Every other method, such as TRACE or QUERY, which Schemathesis sends to
+    # check that undocumented methods are refused: http.server answers 501
+    # for a method without a do_ handler.
+    def __getattr__(self, name):
+        if name.startswith("do_"):
+            return self.not_allowed
+        raise AttributeError(name)
 
 
 if __name__ == "__main__":
