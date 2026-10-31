@@ -420,18 +420,27 @@ oa_git_top() {
     OA_PREFIX=$(git rev-parse --show-prefix)
 }
 
-# oa_from_top PATH: prints PATH, relative to the working directory, as a path
-# relative to OA_TOP, without following symbolic links. Stops the step when
-# PATH is outside the checkout.
+# oa_from_top PATH: prints PATH, absolute or relative to the working
+# directory, as a path relative to OA_TOP, without following the symbolic
+# links in PATH. The working directory is taken by its physical path, as git
+# takes the top's. Stops the step when PATH is outside the checkout.
 oa_from_top() {
-    local path
-    path=$(realpath -ms --relative-to="${OA_TOP}" -- "$(pwd)/$1")
+    local path=$1
+    if [[ "${path}" != /* ]]; then
+        path="$(pwd -P)/${path}"
+    fi
+    path=$(realpath -ms --relative-to="${OA_TOP}" -- "${path}")
     if [[ "${path}" == .. || "${path}" == ../* || "${path}" == /* ]]; then
         echo "ERROR: $1 is outside the git checkout ${OA_TOP}." >&2
         exit 1
     fi
     printf '%s\n' "${path}"
 }
+
+# The long options of oasdiff's diff and changelog that take a value as the
+# next word, which a check of extra_args must not read as a document.
+# shellcheck disable=SC2034 # read by the scripts that eval this file
+OA_OASDIFF_VALUE_OPTIONS=" match-path unmatch-path filter-extension prefix-base prefix-revision strip-prefix-base strip-prefix-revision exclude-extensions max-circular-dep lang deprecation-days-beta deprecation-days-stable attributes stability-level config "
 
 # oa_rank KIND LEVEL: prints the rank of a severity name, higher is worse:
 # for vacuum (KIND lint) hint 0, info 1, warn 2, error 3; for oasdiff (KIND

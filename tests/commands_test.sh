@@ -456,6 +456,13 @@ check "an unknown fail_on is refused" rc_is 1
 check "naming the levels" said "fail_on must be error, warn, info or hint, not 'warning'."
 check "before vacuum runs" no_calls
 
+run lint specs=lint/openapi.yaml output_dir="${WORK}/kept" -- STUB_VACUUM_REPORT="${STUBS}/vacuum-results.json"
+check "(a run that leaves reports)" test -s "${WORK}/kept/lint.json"
+run lint specs=missing.yaml output_dir="${WORK}/kept"
+check "a later run that stops on its inputs fails" rc_is 1
+check "having removed the earlier run's reports, which would be stored as its own" \
+    bash -c '[[ ! -e "$1/lint.json" && ! -e "$1/lint.sarif" && ! -e "$1/junit/lint.xml" ]]' _ "${WORK}/kept"
+
 echo "=== lint: documents"
 run lint specs='openapi.yaml lint/*.yaml' -- STUB_VACUUM_REPORT="${STUBS}/vacuum-results.json"
 check "a list with a glob lints each document" bash -c '[[ "$(grep -l spectral-report "$1"/*.args | wc -l)" -eq 4 ]]' _ "${STUB}/calls"
@@ -568,6 +575,9 @@ check "with every flag that decides what it reads" has oasdiff changelog --forma
 check "both documents are checked to be OpenAPI 3 first" has oasdiff validate --format json -- "${BASE_COMMIT}:openapi.yaml"
 check "the summary" said "3 breaking changes since origin/main (merge base ${BASE_COMMIT:0:12}) in 1 document (2 error, 1 warn; 1 other changes); 2 findings at or above error."
 check "each is listed" said "openapi.yaml: error api-removed-without-deprecation: api removed without deprecation (DELETE /items/{id})"
+run breaking specs="$(cd "${JOB}" && pwd -P)/openapi.yaml" -- STUB_CHANGELOG="${STUBS}/oasdiff-changelog.json"
+check "an absolute path to a committed document is compared too" has oasdiff changelog -- "${BASE_COMMIT}:openapi.yaml" openapi.yaml
+check "and its breaking changes fail the step" rc_is 1
 run breaking merge_base=false -- STUB_CHANGELOG="${STUBS}/oasdiff-changelog.json"
 check "merge_base false compares with the branch itself" has oasdiff changelog -- "${MAIN_TIP}:openapi.yaml" openapi.yaml
 run breaking base_ref=origin/main -- GITHUB_BASE_REF=release STUB_CHANGELOG="${STUBS}/oasdiff-changelog-info.json"
@@ -644,9 +654,9 @@ check "policy files reach oasdiff by their absolute paths" has oasdiff changelog
     "--err-ignore=${JOB}/err-ignore.txt" "--warn-ignore=${JOB}/err-ignore.txt"
 run breaking severity_levels=missing.txt
 check "a policy file that doesn't exist fails" rc_is 1
-run breaking extra_args='--flatten-allof -p /items --deprecation-days-stable 30'
+run breaking extra_args='--flatten-allof -p /items --deprecation-days-stable 30 --max-circular-dep 3'
 check "extra_args oasdiff takes" rc_is 0
-check "reach it" has oasdiff changelog --flatten-allof -p /items --deprecation-days-stable 30 --
+check "reach it" has oasdiff changelog --flatten-allof -p /items --deprecation-days-stable 30 --max-circular-dep 3 --
 for words in --format=yaml '--level err' --fetch --open -o ERR --composed '--err-ignore x' openapi.yaml -p; do
     run breaking extra_args="${words}"
     check "extra_args '${words}' is refused" rc_is 1
@@ -680,6 +690,8 @@ run drift spec=openapi.yaml
 check "without generated, the working tree's copy is compared with HEAD's" has oasdiff diff -- HEAD:openapi.yaml openapi.yaml
 check "from the top of the checkout" meta oasdiff diff "cwd=${JOB}"
 git -C "${JOB}" checkout -q -- openapi.yaml
+run drift spec="$(cd "${JOB}" && pwd -P)/openapi.yaml"
+check "so is an absolute path's" has oasdiff diff -- HEAD:openapi.yaml openapi.yaml
 printf 'openapi: 3.1.0\n' > "${JOB}/untracked.yaml"
 run drift spec=untracked.yaml
 check "a document that isn't committed fails without generated" rc_is 1
@@ -699,8 +711,15 @@ run drift spec=lint/swagger.yaml generated=generated.json -- 'STUB_NOT_OPENAPI=*
 check "a committed document that isn't OpenAPI 3 fails" rc_is 1
 run drift spec=openapi.yaml generated=generated.json run_record=true -- STUB_DIFF="${STUBS}/oasdiff-diff.json"
 check "the run record" report_is drift.run-record.json '.outcome + " " + ([.inputs[].role] | join(","))' '"findings spec,generated"'
-run drift spec=openapi.yaml generated=generated.json extra_args=--fail-on-diff
-check "extra_args can't set fail-on-diff" rc_is 1
+run drift spec=openapi.yaml generated=generated.json extra_args='--match-path /items --max-circular-dep 3 -p /items --flatten-allof'
+check "extra_args oasdiff takes, with their values" rc_is 0
+check "reach its diff" has oasdiff diff --match-path /items --max-circular-dep 3 -p /items --flatten-allof --
+check "and its changelog" has oasdiff changelog --match-path /items --max-circular-dep 3 -p /items --flatten-allof --
+for words in --fail-on-diff --format=yaml -e examples other.yaml --match-path; do
+    run drift spec=openapi.yaml generated=generated.json extra_args="${words}"
+    check "extra_args '${words}' is refused" rc_is 1
+    check "before oasdiff runs" no_calls
+done
 
 echo "=== contract_test: the run"
 run contract_test spec=openapi.yaml url=http://localhost:8080 wait_for_api=0 -- SCHEMATHESIS_HOOKS=evil.hooks SCHEMATHESIS_BASE_URL=http://evil.example
@@ -779,7 +798,19 @@ check "phases" has schemathesis --config-file --phases examples,fuzzing
 check "max_examples and seed" has schemathesis --config-file --max-examples 50 --seed 7 --workers auto --request-timeout 5
 check "formats" has schemathesis --config-file --report-har-path "${OUT}/contract-test.har.json"
 check "write their reports" report contract-test.ndjson
-for setting in phases=everything workers=0 seed=abc max_examples=-1 formats=pdf checks=Not-A-Check wait_for_api=soon; do
+run contract_test spec=openapi.yaml url=http://localhost:8080 wait_for_api=0 seed=82422991785393504163937752414868088611
+check "a seed as long as the ones Schemathesis prints" has schemathesis --config-file --seed 82422991785393504163937752414868088611
+run contract_test spec=openapi.yaml url='https://ci:pa55word@api.example.com/v1?token=t0ken' wait_for_api=1
+check "a url with credentials" rc_is 0
+check "is waited for as given" grep -qF -- 'https://ci:pa55word@api.example.com/v1?token=t0ken' "${STUB}/curl.log"
+check "and reaches Schemathesis" has schemathesis --config-file --url 'https://ci:pa55word@api.example.com/v1?token=t0ken'
+check "but the log names it without them" said "Testing https://api.example.com/v1 against openapi.yaml"
+check "nowhere showing the password" script_lacks "pa55word"
+check "or the token" script_lacks "t0ken"
+run contract_test spec=openapi.yaml url='https://ci:pa55word@api.example.com/v1' wait_for_api=1 -- STUB_API_DOWN=1
+check "an API with credentials in its url that never answers" said "https://api.example.com/v1 did not answer"
+check "is named without them" script_lacks "pa55word"
+for setting in phases=everything workers=0 seed=abc seed=-1 max_examples=-1 formats=pdf checks=Not-A-Check wait_for_api=soon; do
     run contract_test spec=openapi.yaml url=http://localhost:8080 "${setting}"
     check "${setting} is refused" rc_is 1
     check "before Schemathesis runs" no_calls

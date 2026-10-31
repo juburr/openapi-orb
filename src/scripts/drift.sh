@@ -23,11 +23,21 @@ fi
 eval "${SCRIPT_OPENAPI_LIB}"
 
 STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# The reports an earlier run with this report_name left go first, so a check
+# that stops on its inputs leaves none behind to be stored as its own.
+REPORT_NAME=$(oa_subst "${PARAM_REPORT_NAME}")
+oa_output "${PARAM_OUTPUT_DIR}" "${REPORT_NAME}"
+REPORT="${OA_BASE}.json"
+DIFF="${OA_BASE}.diff.json"
+CHANGELOG="${OA_BASE}.md"
+JUNIT_FILE="${OA_OUT%/}/junit/${REPORT_NAME}.xml"
+RECORD="${OA_BASE}.run-record.json"
+rm -f "${REPORT}" "${DIFF}" "${CHANGELOG}" "${JUNIT_FILE}" "${RECORD}"
+
 SPEC=$(oa_subst "${PARAM_SPEC}")
 GENERATED=$(oa_subst "${PARAM_GENERATED}")
 oa_list exclude_elements "${PARAM_EXCLUDE_ELEMENTS}"
 EXCLUDE=(${OA_LIST[@]+"${OA_LIST[@]}"})
-REPORT_NAME=$(oa_subst "${PARAM_REPORT_NAME}")
 JUNIT=$(oa_bool junit "${PARAM_JUNIT}")
 RUN_RECORD=$(oa_bool run_record "${PARAM_RUN_RECORD}")
 REPORT_ONLY=$(oa_bool report_only "${PARAM_REPORT_ONLY}")
@@ -59,12 +69,28 @@ for element in ${EXCLUDE[@]+"${EXCLUDE[@]}"}; do
             ;;
     esac
 done
+# extra_args: oasdiff's own options, never the ones that decide what the
+# command reads, or a word that isn't an option or an option's value, which
+# oasdiff would read as a document.
+expect_value=false
 for word in ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}; do
+    if [[ "${expect_value}" == true ]]; then
+        expect_value=false
+        continue
+    fi
     case "${word}" in
         --format | --format=* | --fail-on-diff* | --fetch | --fetch=* | --open | --open=* | --composed | --composed=* \
             | --exclude-elements* | --level | --level=* | -f* | -o* | -c* | -e*)
             echo "ERROR: extra_args can't hold '${word}': the drift command sets it, or it would change what is read." >&2
             exit 1
+            ;;
+        -p | -q | -l)
+            expect_value=true
+            ;;
+        --*)
+            if [[ "${OA_OASDIFF_VALUE_OPTIONS}" == *" ${word#--} "* ]]; then
+                expect_value=true
+            fi
             ;;
         -*) ;;
         *)
@@ -73,19 +99,16 @@ for word in ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}; do
             ;;
     esac
 done
-oa_output "${PARAM_OUTPUT_DIR}" "${REPORT_NAME}"
+if [[ "${expect_value}" == true ]]; then
+    echo "ERROR: extra_args ends in an option without its value." >&2
+    exit 1
+fi
 oa_require_jq
 oa_tool oasdiff
 VERSION=$("${OA_TOOL}" --version 2> /dev/null | awk '{ print $NF; exit }') || VERSION=""
 
 WORK=$(mktemp -d)
 trap 'rm -rf "${WORK}"' EXIT
-REPORT="${OA_BASE}.json"
-DIFF="${OA_BASE}.diff.json"
-CHANGELOG="${OA_BASE}.md"
-JUNIT_FILE="${OA_OUT%/}/junit/${REPORT_NAME}.xml"
-RECORD="${OA_BASE}.run-record.json"
-rm -f "${REPORT}" "${DIFF}" "${CHANGELOG}" "${JUNIT_FILE}" "${RECORD}"
 
 # --- What to compare ---
 if [[ -n "${GENERATED}" ]]; then

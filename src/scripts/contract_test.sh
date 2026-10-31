@@ -24,6 +24,16 @@ fi
 eval "${SCRIPT_OPENAPI_LIB}"
 
 STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# The reports an earlier run with this report_name left go first, so a check
+# that stops on its inputs leaves none behind to be stored as its own.
+REPORT_NAME=$(oa_subst "${PARAM_REPORT_NAME}")
+oa_output "${PARAM_OUTPUT_DIR}" "${REPORT_NAME}"
+REPORT="${OA_BASE}.json"
+JUNIT_FILE="${OA_OUT%/}/junit/${REPORT_NAME}.xml"
+RECORD="${OA_BASE}.run-record.json"
+rm -f "${REPORT}" "${JUNIT_FILE}" "${RECORD}" "${OA_BASE}.har.json" "${OA_BASE}.vcr.yaml" "${OA_BASE}.ndjson"
+rm -rf "${OA_BASE}.html"
+
 SPEC=$(oa_subst "${PARAM_SPEC}")
 URL=$(oa_subst "${PARAM_URL}")
 oa_list checks "${PARAM_CHECKS}"
@@ -45,7 +55,6 @@ CONFIG=$(oa_subst "${PARAM_CONFIG}")
 oa_list formats "${PARAM_FORMATS}"
 FORMATS=(${OA_LIST[@]+"${OA_LIST[@]}"})
 ALLOW_EMPTY=$(oa_bool allow_empty "${PARAM_ALLOW_EMPTY}")
-REPORT_NAME=$(oa_subst "${PARAM_REPORT_NAME}")
 JUNIT=$(oa_bool junit "${PARAM_JUNIT}")
 RUN_RECORD=$(oa_bool run_record "${PARAM_RUN_RECORD}")
 REPORT_ONLY=$(oa_bool report_only "${PARAM_REPORT_ONLY}")
@@ -61,7 +70,7 @@ elif [[ -z "${SPEC}" || "${SPEC}" == -* || ! -f "${SPEC}" ]]; then
     exit 1
 fi
 if [[ -n "${URL}" ]] && ! oa_match "${URL}" '^https?://[^[:space:]]+$'; then
-    echo "ERROR: url must be the API's base URL, http:// or https://, not '${URL}'." >&2
+    echo "ERROR: url must be the API's base URL, http:// or https://, not '$(oa_url_public "${URL}")'." >&2
     exit 1
 fi
 if [[ -z "${URL}" && "${SPEC_URL}" == false ]]; then
@@ -84,11 +93,16 @@ for phase in ${PHASES[@]+"${PHASES[@]}"}; do
             ;;
     esac
 done
-for entry in max_examples:"${MAX_EXAMPLES}" seed:"${SEED}" request_timeout:"${REQUEST_TIMEOUT}"; do
+for entry in max_examples:"${MAX_EXAMPLES}" request_timeout:"${REQUEST_TIMEOUT}"; do
     if [[ -n "${entry#*:}" ]]; then
         oa_uint "${entry%%:*}" "${entry#*:}" 1
     fi
 done
+# Schemathesis's seeds are 128-bit numbers, too large for shell arithmetic.
+if [[ -n "${SEED}" ]] && ! oa_match "${SEED}" '^[0-9]{1,40}$'; then
+    echo "ERROR: seed must be a whole number, such as the seed a failed run printed, not '${SEED}'." >&2
+    exit 1
+fi
 if [[ "${WORKERS}" != auto ]]; then
     oa_uint workers "${WORKERS}" 1
 fi
@@ -152,18 +166,12 @@ for word in ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}; do
     esac
     previous=${word}
 done
-oa_output "${PARAM_OUTPUT_DIR}" "${REPORT_NAME}"
 oa_require_jq
 oa_tool schemathesis
 VERSION=$("${OA_TOOL}" --version 2> /dev/null | awk '{ print $NF; exit }') || VERSION=""
 
 WORK=$(mktemp -d)
 trap 'rm -rf "${WORK}"' EXIT
-REPORT="${OA_BASE}.json"
-JUNIT_FILE="${OA_OUT%/}/junit/${REPORT_NAME}.xml"
-RECORD="${OA_BASE}.run-record.json"
-rm -f "${REPORT}" "${JUNIT_FILE}" "${RECORD}" "${OA_BASE}.har.json" "${OA_BASE}.vcr.yaml" "${OA_BASE}.ndjson"
-rm -rf "${OA_BASE}.html"
 
 # --- Configuration ---
 if [[ -n "${CONFIG}" ]]; then
@@ -200,13 +208,19 @@ else
 fi
 
 # --- Wait for the API ---
+# Messages name URLs without credentials, as the run record does.
 TARGET=${URL:-${SPEC}}
+SHOWN_TARGET=$(oa_url_public "${TARGET}")
+SHOWN_SPEC=${SPEC}
+if [[ "${SPEC_URL}" == true ]]; then
+    SHOWN_SPEC=$(oa_url_public "${SPEC}")
+fi
 if [[ "${WAIT_FOR_API}" -gt 0 ]]; then
-    echo "Waiting up to ${WAIT_FOR_API}s for ${TARGET} to answer..."
+    echo "Waiting up to ${WAIT_FOR_API}s for ${SHOWN_TARGET} to answer..."
     deadline=$((SECONDS + WAIT_FOR_API))
     until status=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 -- "${TARGET}" 2> /dev/null) && [[ "${status}" != 000 ]]; do
         if ((SECONDS >= deadline)); then
-            echo "ERROR: ${TARGET} did not answer within ${WAIT_FOR_API} seconds, so the API was not tested. Start it in an" >&2
+            echo "ERROR: ${SHOWN_TARGET} did not answer within ${WAIT_FOR_API} seconds, so the API was not tested. Start it in an" >&2
             echo "  earlier step (in the background), or raise wait_for_api." >&2
             exit 1
         fi
@@ -278,7 +292,11 @@ record() {
     oa_run_record "${RECORD}" contract_test "$1" "$2" "${STARTED}"
 }
 
-echo "Testing ${URL:-the API ${SPEC} names} against ${SPEC} with Schemathesis ${VERSION:-(version unknown)}:"
+if [[ -n "${URL}" ]]; then
+    echo "Testing ${SHOWN_TARGET} against ${SHOWN_SPEC} with Schemathesis ${VERSION:-(version unknown)}:"
+else
+    echo "Testing the API ${SHOWN_SPEC} names against it with Schemathesis ${VERSION:-(version unknown)}:"
+fi
 oa_show_command schemathesis "${ARGS[@]}" | sed 's/^/  /'
 CODE=0
 # Hypothesis keeps its example database and caches beside the work directory,

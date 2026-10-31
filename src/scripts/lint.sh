@@ -24,6 +24,16 @@ fi
 eval "${SCRIPT_OPENAPI_LIB}"
 
 STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# The reports an earlier run with this report_name left go first, so a check
+# that stops on its inputs leaves none behind to be stored as its own.
+REPORT_NAME=$(oa_subst "${PARAM_REPORT_NAME}")
+oa_output "${PARAM_OUTPUT_DIR}" "${REPORT_NAME}"
+REPORT="${OA_BASE}.json"
+SARIF="${OA_BASE}.sarif"
+JUNIT_FILE="${OA_OUT%/}/junit/${REPORT_NAME}.xml"
+RECORD="${OA_BASE}.run-record.json"
+rm -f "${REPORT}" "${SARIF}" "${JUNIT_FILE}" "${RECORD}"
+
 oa_specs specs "${PARAM_SPECS}"
 SPECS=("${OA_FILES[@]}")
 RULESET=$(oa_subst "${PARAM_RULESET}")
@@ -31,7 +41,6 @@ HARD_MODE=$(oa_bool hard_mode "${PARAM_HARD_MODE}")
 FUNCTIONS=$(oa_subst "${PARAM_FUNCTIONS}")
 IGNORE_FILE=$(oa_subst "${PARAM_IGNORE_FILE}")
 FAIL_ON=$(oa_subst "${PARAM_FAIL_ON}")
-REPORT_NAME=$(oa_subst "${PARAM_REPORT_NAME}")
 JUNIT=$(oa_bool junit "${PARAM_JUNIT}")
 RUN_RECORD=$(oa_bool run_record "${PARAM_RUN_RECORD}")
 REPORT_ONLY=$(oa_bool report_only "${PARAM_REPORT_ONLY}")
@@ -116,17 +125,11 @@ if [[ "${expect_value}" == true ]]; then
     echo "ERROR: extra_args ends in an option without its value." >&2
     exit 1
 fi
-oa_output "${PARAM_OUTPUT_DIR}" "${REPORT_NAME}"
 oa_require_jq
 oa_tool vacuum
 
 WORK=$(mktemp -d)
 trap 'rm -rf "${WORK}"' EXIT
-REPORT="${OA_BASE}.json"
-SARIF="${OA_BASE}.sarif"
-JUNIT_FILE="${OA_OUT%/}/junit/${REPORT_NAME}.xml"
-RECORD="${OA_BASE}.run-record.json"
-rm -f "${REPORT}" "${SARIF}" "${JUNIT_FILE}" "${RECORD}"
 
 # vacuum reads only this empty configuration, and no VACUUM_* variable.
 printf '# openapi-orb: vacuum runs with the lint command parameters alone.\n' > "${WORK}/vacuum.conf.yaml"

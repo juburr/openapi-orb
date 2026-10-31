@@ -26,6 +26,17 @@ fi
 eval "${SCRIPT_OPENAPI_LIB}"
 
 STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# The reports an earlier run with this report_name left go first, so a check
+# that stops on its inputs leaves none behind to be stored as its own.
+REPORT_NAME=$(oa_subst "${PARAM_REPORT_NAME}")
+oa_output "${PARAM_OUTPUT_DIR}" "${REPORT_NAME}"
+REPORT="${OA_BASE}.json"
+CHANGELOG="${OA_BASE}.md"
+SARIF="${OA_BASE}.sarif"
+JUNIT_FILE="${OA_OUT%/}/junit/${REPORT_NAME}.xml"
+RECORD="${OA_BASE}.run-record.json"
+rm -f "${REPORT}" "${CHANGELOG}" "${SARIF}" "${JUNIT_FILE}" "${RECORD}"
+
 oa_specs specs "${PARAM_SPECS}"
 SPECS=("${OA_FILES[@]}")
 BASE_REF=$(oa_subst "${PARAM_BASE_REF}")
@@ -36,7 +47,6 @@ FAIL_ON=$(oa_subst "${PARAM_FAIL_ON}")
 SEVERITY_LEVELS=$(oa_subst "${PARAM_SEVERITY_LEVELS}")
 ERR_IGNORE=$(oa_subst "${PARAM_ERR_IGNORE}")
 WARN_IGNORE=$(oa_subst "${PARAM_WARN_IGNORE}")
-REPORT_NAME=$(oa_subst "${PARAM_REPORT_NAME}")
 JUNIT=$(oa_bool junit "${PARAM_JUNIT}")
 RUN_RECORD=$(oa_bool run_record "${PARAM_RUN_RECORD}")
 REPORT_ONLY=$(oa_bool report_only "${PARAM_REPORT_ONLY}")
@@ -87,7 +97,6 @@ done
 # command reads (format, level), that fetch or upload (fetch, open), or a
 # word that isn't an option, which oasdiff would read as a document.
 expect_value=false
-takes_value=" match-path unmatch-path filter-extension prefix-base prefix-revision strip-prefix-base strip-prefix-revision exclude-extensions lang deprecation-days-beta deprecation-days-stable attributes stability-level config "
 for word in ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}; do
     if [[ "${expect_value}" == true ]]; then
         expect_value=false
@@ -105,7 +114,7 @@ for word in ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}; do
             ;;
         --*)
             name=${word#--}
-            if [[ " ${takes_value} " == *" ${name} "* ]]; then
+            if [[ "${OA_OASDIFF_VALUE_OPTIONS}" == *" ${name} "* ]]; then
                 expect_value=true
             fi
             ;;
@@ -120,19 +129,12 @@ if [[ "${expect_value}" == true ]]; then
     echo "ERROR: extra_args ends in an option without its value." >&2
     exit 1
 fi
-oa_output "${PARAM_OUTPUT_DIR}" "${REPORT_NAME}"
 oa_require_jq
 oa_tool oasdiff
 VERSION=$("${OA_TOOL}" --version 2> /dev/null | awk '{ print $NF; exit }') || VERSION=""
 
 WORK=$(mktemp -d)
 trap 'rm -rf "${WORK}"' EXIT
-REPORT="${OA_BASE}.json"
-CHANGELOG="${OA_BASE}.md"
-SARIF="${OA_BASE}.sarif"
-JUNIT_FILE="${OA_OUT%/}/junit/${REPORT_NAME}.xml"
-RECORD="${OA_BASE}.run-record.json"
-rm -f "${REPORT}" "${CHANGELOG}" "${SARIF}" "${JUNIT_FILE}" "${RECORD}"
 
 # --- The base ---
 BASE_COMMIT=""
