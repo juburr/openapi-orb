@@ -1,0 +1,41 @@
+{
+  "schemathesis_version": "4.32.4",
+  "command": "st run",
+  "seed": 12345,
+  "started_at": "2026-10-31T00:00:00Z",
+  "running_time": 1.5,
+  "stop_reason": "server_unavailable",
+  "complete": false,
+  "exit_code": 1,
+  "operations": {
+    "total": 4,
+    "selected": 4,
+    "tested": 4,
+    "errored": 0,
+    "skipped": 0,
+    "skip_reasons": {}
+  },
+  "phases": {
+    "examples": {
+      "status": "success",
+      "skip_reason": null
+    }
+  },
+  "test_cases": {
+    "generated": 240,
+    "with_failures": 0,
+    "unique_failures": 0,
+    "without_checks": 0,
+    "errored": 0
+  },
+  "failures": [],
+  "errors": [],
+  "baseline": null,
+  "filtered": null,
+  "warnings": [],
+  "valid_rates": {},
+  "auth": {
+    "reauth_count": 0,
+    "reauth_broke": false
+  }
+}

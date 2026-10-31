@@ -1,0 +1,14 @@
+openapi: 3.1.0
+info:
+  title: A reference to a file that isn't there
+  version: 1.0.0
+paths:
+  /items:
+    get:
+      responses:
+        "200":
+          description: The items.
+          content:
+            application/json:
+              schema:
+                $ref: "./schemas/missing.yaml"

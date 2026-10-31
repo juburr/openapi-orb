@@ -1,0 +1,182 @@
+name: Test an API against its OpenAPI document with Schemathesis
+description: >
+  Tests a running API against its OpenAPI document with Schemathesis, which
+  generates requests from the document, sends them to the API, and checks every
+  response against it: server errors, status codes, content types, headers and
+  bodies the document doesn't allow, and requests the API should have refused or
+  accepted. Start the API in an earlier step, in the background; this command
+  waits for it to answer. Failed checks fail the step unless report_only is
+  true; an error (a document Schemathesis couldn't load, an operation it
+  couldn't test, an API that stopped answering), a run that didn't complete, or
+  one that tested nothing fails it either way. Writes Schemathesis's JSON report
+  and JUnit, with a curl command that reproduces each failure. Never point it at
+  a production API: it sends many requests, malformed ones included. Run the
+  install action (tools: schemathesis) first. The GitHub Actions twin of the
+  orb's contract_test command.
+author: juburr
+
+inputs:
+  working_dir:
+    description: >
+      The directory to run in. spec and config are relative to it.
+    default: .
+  spec:
+    description: >
+      The API's OpenAPI document: a file, or an http(s):// URL the API serves it at.
+    required: true
+  url:
+    description: >
+      The base URL of the API to test, such as http://localhost:8080, which the
+      document's paths are relative to. Required when spec is a file.
+    default: ""
+  checks:
+    description: >
+      The Schemathesis checks to run, separated by commas or spaces, such as
+      not_a_server_error,response_schema_conformance. Leave empty for all of them,
+      Schemathesis's default.
+    default: ""
+  exclude_checks:
+    description: >
+      Schemathesis checks to leave out, separated by commas or spaces.
+    default: ""
+  phases:
+    description: >
+      The test phases to run, separated by commas or spaces: examples, coverage,
+      fuzzing and stateful. Leave empty for all four.
+    default: ""
+  max_examples:
+    description: >
+      The most test cases to generate for each operation in the fuzzing and stateful
+      phases. Leave empty for Schemathesis's 100.
+    default: ""
+  seed:
+    description: >
+      The seed for generating test cases, to repeat a run exactly. Leave empty for a
+      random one, which the report and the run record name.
+    default: ""
+  workers:
+    description: >
+      How many operations to test at once: 1 to 64, or auto.
+    default: "1"
+  request_timeout:
+    description: >
+      Seconds to wait for each response. Leave empty for Schemathesis's 10.
+    default: ""
+  wait_for_api:
+    description: >
+      Seconds to wait for url (or spec, when it is a URL) to answer before testing;
+      0 doesn't wait.
+    default: "60"
+  headers:
+    description: >
+      Headers to send with every request, one "Name: value" per line, such as
+      "Authorization: Bearer ${API_TOKEN}". The value is not expanded by the orb:
+      Schemathesis fills in each ${NAME} from the environment as it runs, so a
+      secret reaches neither a file nor a command line. Output and reports mask
+      Authorization and the like.
+    default: ""
+  config:
+    description: >
+      A schemathesis.toml to run with, such as one with hooks, auth or per-operation
+      settings. Leave empty to run with the parameters alone: a schemathesis.toml in
+      the checkout is not read. Can't be used with headers.
+    default: ""
+  formats:
+    description: >
+      Further Schemathesis reports, separated by commas or spaces: har (every
+      request and response), vcr, ndjson (every event) and html. They hold the API's
+      responses as they were.
+    default: ""
+  allow_empty:
+    description: >
+      Let a run pass that tested no operation, as when the document has none the
+      checks apply to. By default it fails, since it checked nothing.
+    default: "false"
+  extra_args:
+    description: >
+      Further options for st run, such as --mode positive or --max-failures 10. They
+      are split like shell words, but nothing in them is expanded or run. Options
+      the command sets itself, and --header and --auth, which would put a secret on
+      the command line, are refused.
+    default: ""
+  report_name:
+    description: >
+      The reports' file name without its extension: <report_name>.json
+      (Schemathesis's JSON report) and the formats asked for. Letters, digits, '.',
+      '_' and '-'.
+    default: contract-test
+  output_dir:
+    description: >
+      Absolute path of the directory to write the reports into.
+    default: /tmp/openapi-reports
+  junit:
+    description: >
+      Write the findings as JUnit (output_dir/junit/<report_name>.xml).
+    default: "true"
+  run_record:
+    description: >
+      Also write a run record (<report_name>.run-record.json): what was checked,
+      with which tool and settings, and what it found.
+    default: "false"
+  report_only:
+    description: >
+      Report findings without failing the step, to adopt the check gradually. A
+      check that couldn't run, or that checked nothing, still fails it.
+    default: "false"
+  store_artifacts:
+    description: >
+      Upload output_dir as a workflow artifact named
+      openapi-reports-<report_name>-<random>, including when the step fails.
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    # Artifact names must be unique in a workflow run, and the same command
+    # can run in several jobs or matrix legs, so the name ends in a random
+    # suffix.
+    - name: Name the reports artifact
+      id: artifact
+      if: (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      shell: bash
+      env:
+        REPORT_NAME: ${{ inputs.report_name }}
+      run: |
+        if [[ ! "${REPORT_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            REPORT_NAME=reports
+        fi
+        printf 'name=openapi-reports-%s-%s\n' "${REPORT_NAME}" "$(od -An -tx1 -N4 /dev/urandom | tr -d ' \n')" >> "${GITHUB_OUTPUT}"
+    - name: Schemathesis
+      shell: bash
+      working-directory: ${{ inputs.working_dir }}
+      env:
+        PARAM_ALLOW_EMPTY: ${{ inputs.allow_empty }}
+        PARAM_CHECKS: ${{ inputs.checks }}
+        PARAM_CONFIG: ${{ inputs.config }}
+        PARAM_EXCLUDE_CHECKS: ${{ inputs.exclude_checks }}
+        PARAM_EXTRA_ARGS: ${{ inputs.extra_args }}
+        PARAM_FORMATS: ${{ inputs.formats }}
+        PARAM_HEADERS: ${{ inputs.headers }}
+        PARAM_JUNIT: ${{ inputs.junit }}
+        PARAM_MAX_EXAMPLES: ${{ inputs.max_examples }}
+        PARAM_OUTPUT_DIR: ${{ inputs.output_dir }}
+        PARAM_PHASES: ${{ inputs.phases }}
+        PARAM_REPORT_NAME: ${{ inputs.report_name }}
+        PARAM_REPORT_ONLY: ${{ inputs.report_only }}
+        PARAM_REQUEST_TIMEOUT: ${{ inputs.request_timeout }}
+        PARAM_RUN_RECORD: ${{ inputs.run_record }}
+        PARAM_SEED: ${{ inputs.seed }}
+        PARAM_SPEC: ${{ inputs.spec }}
+        PARAM_URL: ${{ inputs.url }}
+        PARAM_WAIT_FOR_API: ${{ inputs.wait_for_api }}
+        PARAM_WORKERS: ${{ inputs.workers }}
+      run: >-
+        bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/contract_test.sh"
+        "SCRIPT_OPENAPI_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/openapi.sh"
+    - name: Upload the reports
+      if: always() && (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ steps.artifact.outputs.name }}
+        path: ${{ inputs.output_dir }}
+        if-no-files-found: ignore

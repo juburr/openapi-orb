@@ -1,0 +1,199 @@
+description: >
+  Tests a running API against its OpenAPI document with Schemathesis, which
+  generates requests from the document, sends them to the API, and checks
+  every response against it: server errors, status codes, content types,
+  headers and bodies the document doesn't allow, and requests the API should
+  have refused or accepted. Start the API in an earlier step, in the
+  background; this command waits for it to answer. Failed checks fail the
+  step unless report_only is true; an error (a document Schemathesis
+  couldn't load, an operation it couldn't test, an API that stopped
+  answering), a run that didn't complete, or one that tested nothing fails it
+  either way. Writes Schemathesis's JSON report and JUnit, with a curl
+  command that reproduces each failure. Never point it at a production API:
+  it sends many requests, malformed ones included. Run install (tools:
+  schemathesis) first.
+parameters:
+  working_dir:
+    type: string
+    default: "."
+    description: The directory to run in. spec and config are relative to it.
+  spec:
+    type: string
+    description: >
+      The API's OpenAPI document: a file, or an http(s):// URL the API serves
+      it at. Environment variables are expanded.
+  url:
+    type: string
+    default: ""
+    description: >
+      The base URL of the API to test, such as http://localhost:8080, which
+      the document's paths are relative to. Required when spec is a file.
+      Environment variables are expanded.
+  checks:
+    type: string
+    default: ""
+    description: >
+      The Schemathesis checks to run, separated by commas or spaces, such as
+      not_a_server_error,response_schema_conformance. Leave empty for all of
+      them, Schemathesis's default. Environment variables are expanded.
+  exclude_checks:
+    type: string
+    default: ""
+    description: >
+      Schemathesis checks to leave out, separated by commas or spaces.
+      Environment variables are expanded.
+  phases:
+    type: string
+    default: ""
+    description: >
+      The test phases to run, separated by commas or spaces: examples,
+      coverage, fuzzing and stateful. Leave empty for all four. Environment
+      variables are expanded.
+  max_examples:
+    type: string
+    default: ""
+    description: >
+      The most test cases to generate for each operation in the fuzzing and
+      stateful phases. Leave empty for Schemathesis's 100. Environment
+      variables are expanded.
+  seed:
+    type: string
+    default: ""
+    description: >
+      The seed for generating test cases, to repeat a run exactly. Leave empty
+      for a random one, which the report and the run record name.
+      Environment variables are expanded.
+  workers:
+    type: string
+    default: "1"
+    description: >
+      How many operations to test at once: 1 to 64, or auto. Environment
+      variables are expanded.
+  request_timeout:
+    type: string
+    default: ""
+    description: >
+      Seconds to wait for each response. Leave empty for Schemathesis's 10.
+      Environment variables are expanded.
+  wait_for_api:
+    type: string
+    default: "60"
+    description: >
+      Seconds to wait for url (or spec, when it is a URL) to answer before
+      testing; 0 doesn't wait. Environment variables are expanded.
+  headers:
+    type: string
+    default: ""
+    description: >
+      Headers to send with every request, one "Name: value" per line, such as
+      "Authorization: Bearer ${API_TOKEN}". The value is not expanded by the
+      orb: Schemathesis fills in each ${NAME} from the environment as it runs,
+      so a secret reaches neither a file nor a command line. Output and
+      reports mask Authorization and the like.
+  config:
+    type: string
+    default: ""
+    description: >
+      A schemathesis.toml to run with, such as one with hooks, auth or
+      per-operation settings. Leave empty to run with the parameters alone:
+      a schemathesis.toml in the checkout is not read. Can't be used with
+      headers. Environment variables are expanded.
+  formats:
+    type: string
+    default: ""
+    description: >
+      Further Schemathesis reports, separated by commas or spaces: har (every
+      request and response), vcr, ndjson (every event) and html. They hold
+      the API's responses as they were. Environment variables are expanded.
+  allow_empty:
+    type: boolean
+    default: false
+    description: >
+      Let a run pass that tested no operation, as when the document has none
+      the checks apply to. By default it fails, since it checked nothing.
+  extra_args:
+    type: string
+    default: ""
+    description: >
+      Further options for st run, such as --mode positive or --max-failures 10.
+      They are split like shell words, but nothing in them is expanded or
+      run. Options the command sets itself, and --header and --auth, which
+      would put a secret on the command line, are refused. Environment
+      variables are expanded.
+  report_name:
+    type: string
+    default: contract-test
+    description: >
+      The reports' file name without its extension: <report_name>.json
+      (Schemathesis's JSON report) and the formats asked for. Letters, digits,
+      '.', '_' and '-'.
+  output_dir:
+    type: string
+    default: /tmp/openapi-reports
+    description: >
+      Absolute path of the directory to write the reports into. Environment
+      variables are not expanded, since the path is also passed to
+      store_artifacts and store_test_results.
+  junit:
+    type: boolean
+    default: true
+    description: >
+      Write the findings as JUnit (output_dir/junit/<report_name>.xml), and
+      store it with store_test_results for CircleCI's Tests tab.
+  run_record:
+    type: boolean
+    default: false
+    description: >
+      Also write a run record (<report_name>.run-record.json): what was
+      checked, with which tool and settings, and what it found.
+  report_only:
+    type: boolean
+    default: false
+    description: >
+      Report findings without failing the step, to adopt the check
+      gradually. A check that couldn't run, or that checked nothing, still
+      fails it.
+  store_artifacts:
+    type: boolean
+    default: true
+    description: Store output_dir as job artifacts under openapi-reports/, including when the step fails.
+steps:
+  - run:
+      name: Schemathesis (<< parameters.report_name >>)
+      working_directory: << parameters.working_dir >>
+      environment:
+        PARAM_ALLOW_EMPTY: << parameters.allow_empty >>
+        PARAM_CHECKS: << parameters.checks >>
+        PARAM_CONFIG: << parameters.config >>
+        PARAM_EXCLUDE_CHECKS: << parameters.exclude_checks >>
+        PARAM_EXTRA_ARGS: << parameters.extra_args >>
+        PARAM_FORMATS: << parameters.formats >>
+        PARAM_HEADERS: << parameters.headers >>
+        PARAM_JUNIT: << parameters.junit >>
+        PARAM_MAX_EXAMPLES: << parameters.max_examples >>
+        PARAM_OUTPUT_DIR: << parameters.output_dir >>
+        PARAM_PHASES: << parameters.phases >>
+        PARAM_REPORT_NAME: << parameters.report_name >>
+        PARAM_REPORT_ONLY: << parameters.report_only >>
+        PARAM_REQUEST_TIMEOUT: << parameters.request_timeout >>
+        PARAM_RUN_RECORD: << parameters.run_record >>
+        PARAM_SEED: << parameters.seed >>
+        PARAM_SPEC: << parameters.spec >>
+        PARAM_URL: << parameters.url >>
+        PARAM_WAIT_FOR_API: << parameters.wait_for_api >>
+        PARAM_WORKERS: << parameters.workers >>
+        SCRIPT_OPENAPI_LIB: << include(scripts/lib/openapi.sh) >>
+      command: << include(scripts/contract_test.sh) >>
+  - when:
+      condition: << parameters.junit >>
+      steps:
+        - store_test_results:
+            path: << parameters.output_dir >>/junit/<< parameters.report_name >>.xml
+            when: always
+  - when:
+      condition: << parameters.store_artifacts >>
+      steps:
+        - store_artifacts:
+            path: << parameters.output_dir >>
+            destination: openapi-reports
+            when: always

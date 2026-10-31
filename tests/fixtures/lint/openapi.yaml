@@ -1,0 +1,21 @@
+openapi: 3.1.0
+info:
+  title: Lint findings
+  version: 1.0.0
+paths:
+  /things/{id}:
+    get:
+      responses:
+        "200":
+          description: A thing, though the path parameter is never declared.
+    post:
+      operationId: makeThing
+      responses:
+        "201":
+          description: Made.
+  /things:
+    get:
+      operationId: makeThing
+      responses:
+        "200":
+          description: Duplicate operationId.

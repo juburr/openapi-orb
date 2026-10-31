@@ -1,0 +1,6 @@
+[
+  {"id": "api-removed-without-deprecation", "text": "api removed without deprecation", "level": 3, "operation": "DELETE", "operationId": "deleteItem", "path": "/items/{id}", "section": "paths", "baseSource": {"file": "api/openapi.yaml", "line": 90, "column": 5}, "fingerprint": "a1b2c3d4e5f6"},
+  {"id": "new-required-request-property", "text": "added the new required request property 'sku'", "level": 3, "operation": "POST", "operationId": "createItem", "path": "/items", "section": "paths", "baseSource": {"file": "api/openapi.yaml", "line": 37, "column": 15}, "revisionSource": {"file": "api/openapi.yaml", "line": 106, "column": 9}, "fingerprint": "b2c3d4e5f6a1"},
+  {"id": "response-optional-property-removed", "text": "removed the optional property 'tags' from the response with the '200' status", "level": 2, "operation": "GET", "operationId": "listItems", "path": "/items", "section": "paths", "revisionSource": {"file": "api/openapi.yaml", "line": 25, "column": 11}, "fingerprint": "c3d4e5f6a1b2"},
+  {"id": "endpoint-added", "text": "endpoint added", "level": 1, "operation": "GET", "operationId": "health", "path": "/health", "section": "paths", "revisionSource": {"file": "api/openapi.yaml", "line": 58, "column": 5}, "fingerprint": "d4e5f6a1b2c3"}
+]

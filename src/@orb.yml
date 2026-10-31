@@ -1,0 +1,15 @@
+version: 2.1
+
+description: >
+  Keep OpenAPI documents honest on every commit: lint them with vacuum
+  (validity, style and the OWASP API security rules), catch the changes that
+  break clients with oasdiff, check that the committed document still
+  matches the one the code generates, bundle multi-file documents, and test
+  the running API against its document with Schemathesis. Every tool is
+  installed checksum-verified. JSON, SARIF and JUnit reports, run records,
+  and a gate that never passes a check that couldn't run. Works for any
+  language. Every command has a GitHub Action of the same name.
+
+display:
+  home_url: "https://github.com/juburr/openapi-orb"
+  source_url: "https://github.com/juburr/openapi-orb"

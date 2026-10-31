@@ -1,0 +1,34 @@
+description: >
+  Test the running API against its OpenAPI document: start the API in the
+  background, and contract_test waits for it to answer, then has Schemathesis
+  send generated requests and check every response against the document.
+  The token comes from a context; Schemathesis fills in ${API_TOKEN} itself,
+  so it reaches neither a file nor a command line.
+
+usage:
+  version: 2.1
+  orbs:
+    openapi: juburr/openapi-orb@0.1.0
+  jobs:
+    contract-test:
+      docker:
+        - image: cimg/base:current
+      steps:
+        - checkout
+        - run:
+            name: Start the API
+            background: true
+            command: ./bin/server --port 8080
+        - openapi/install:
+            tools: schemathesis
+        - openapi/contract_test:
+            spec: openapi.yaml
+            url: http://localhost:8080
+            headers: |
+              Authorization: Bearer ${API_TOKEN}
+            max_examples: "50"
+  workflows:
+    contract-test:
+      jobs:
+        - contract-test:
+            context: api-test-credentials

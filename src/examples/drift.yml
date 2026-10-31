@@ -1,0 +1,32 @@
+description: >
+  Keep a committed OpenAPI document in step with the code: an earlier step
+  generates the document from the code, in any language, and drift compares
+  it with the committed one as data, so formatting and key order don't count
+  but a changed field does. Here the descriptions and examples don't count
+  either.
+
+usage:
+  version: 2.1
+  orbs:
+    openapi: juburr/openapi-orb@0.1.0
+  jobs:
+    drift:
+      docker:
+        - image: cimg/python:3.13
+      steps:
+        - checkout
+        - run:
+            name: Generate the document from the code
+            command: |
+              pip install -r requirements.txt
+              python -c 'import json, app; print(json.dumps(app.app.openapi()))' > /tmp/openapi.generated.json
+        - openapi/install:
+            tools: oasdiff
+        - openapi/drift:
+            spec: openapi.yaml
+            generated: /tmp/openapi.generated.json
+            exclude_elements: description,examples
+  workflows:
+    drift:
+      jobs:
+        - drift

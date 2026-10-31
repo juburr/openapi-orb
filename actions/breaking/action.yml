@@ -1,0 +1,155 @@
+name: Find breaking OpenAPI changes with oasdiff
+description: >
+  Finds the changes to OpenAPI documents that break their clients, with oasdiff:
+  each document in the working tree against itself at a base revision, by
+  default where this branch left the remote's default branch (or, on GitHub
+  Actions, a pull request's base branch), or against base_file. oasdiff reads
+  the base from git itself, $refs to other files included, so the checkout needs
+  the base commit (actions/checkout: fetch-depth: 0). Breaking changes at or
+  above fail_on fail the step unless report_only is true; a comparison that
+  couldn't run, or a document that isn't OpenAPI 3, fails it either way. A
+  document the base doesn't have is new, and passes. Writes the changes as JSON,
+  a Markdown changelog for a pull request, SARIF (for GitHub code scanning) and
+  JUnit. Run the install action (tools: oasdiff) first. The GitHub Actions twin
+  of the orb's breaking command.
+author: juburr
+
+inputs:
+  working_dir:
+    description: >
+      The directory to run in. specs, base_spec, base_file and the policy files are
+      relative to it.
+    default: .
+  specs:
+    description: >
+      The documents to check, separated by commas or spaces, each a path or a glob
+      relative to the working directory. Leave empty for the first of openapi.yaml,
+      openapi.yml, openapi.json, swagger.yaml, swagger.yml and swagger.json in the
+      working directory.
+    default: ""
+  base_ref:
+    description: >
+      The branch, tag or commit to compare with, such as origin/main or v1.4.0.
+      Leave empty for origin/$GITHUB_BASE_REF on a GitHub Actions pull request, or
+      else the remote's default branch (origin/HEAD, origin/main or origin/master).
+    default: ""
+  merge_base:
+    description: >
+      Compare with the merge base of base_ref and HEAD, where this branch left it,
+      so the changes others made to base_ref since don't count. Set it to false to
+      compare with base_ref itself, as for a release tag.
+    default: "true"
+  base_spec:
+    description: >
+      Where the document was at the base, relative to the working directory, when it
+      has moved since. Leave empty for the same path. Only with one document.
+    default: ""
+  base_file:
+    description: >
+      A file to compare with instead of a git revision, such as the document a
+      published API serves, downloaded in an earlier step. Only with one document,
+      and without base_ref.
+    default: ""
+  fail_on:
+    description: >
+      The lowest level of breaking change that is a finding: error (oasdiff's ERR, a
+      change that breaks clients) or warn (WARN, one that may).
+    default: error
+  severity_levels:
+    description: >
+      An oasdiff severity levels file: one "<rule id> <err|warn|info|none>" per
+      line, to change a check's level or turn it off.
+    default: ""
+  err_ignore:
+    description: >
+      An oasdiff ignore file for ERR changes: one line per change to accept, with
+      its method and path and the change's text.
+    default: ""
+  warn_ignore:
+    description: >
+      An oasdiff ignore file for WARN changes, as err_ignore.
+    default: ""
+  extra_args:
+    description: >
+      Further options for oasdiff's changelog, such as --flatten-allof or
+      --match-path. They are split like shell words, but nothing in them is expanded
+      or run. Options the command sets itself, and those that fetch or upload, are
+      refused.
+    default: ""
+  report_name:
+    description: >
+      The reports' file name without its extension: <report_name>.json (every
+      change, with its level and the document it is in), <report_name>.md (the
+      changelog) and <report_name>.sarif (the breaking changes). Letters, digits,
+      '.', '_' and '-'.
+    default: breaking
+  output_dir:
+    description: >
+      Absolute path of the directory to write the reports into.
+    default: /tmp/openapi-reports
+  junit:
+    description: >
+      Write the findings as JUnit (output_dir/junit/<report_name>.xml).
+    default: "true"
+  run_record:
+    description: >
+      Also write a run record (<report_name>.run-record.json): what was checked,
+      with which tool and settings, and what it found.
+    default: "false"
+  report_only:
+    description: >
+      Report findings without failing the step, to adopt the check gradually. A
+      check that couldn't run, or that checked nothing, still fails it.
+    default: "false"
+  store_artifacts:
+    description: >
+      Upload output_dir as a workflow artifact named
+      openapi-reports-<report_name>-<random>, including when the step fails.
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    # Artifact names must be unique in a workflow run, and the same command
+    # can run in several jobs or matrix legs, so the name ends in a random
+    # suffix.
+    - name: Name the reports artifact
+      id: artifact
+      if: (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      shell: bash
+      env:
+        REPORT_NAME: ${{ inputs.report_name }}
+      run: |
+        if [[ ! "${REPORT_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            REPORT_NAME=reports
+        fi
+        printf 'name=openapi-reports-%s-%s\n' "${REPORT_NAME}" "$(od -An -tx1 -N4 /dev/urandom | tr -d ' \n')" >> "${GITHUB_OUTPUT}"
+    - name: oasdiff
+      shell: bash
+      working-directory: ${{ inputs.working_dir }}
+      env:
+        PARAM_BASE_FILE: ${{ inputs.base_file }}
+        PARAM_BASE_REF: ${{ inputs.base_ref }}
+        PARAM_BASE_SPEC: ${{ inputs.base_spec }}
+        PARAM_ERR_IGNORE: ${{ inputs.err_ignore }}
+        PARAM_EXTRA_ARGS: ${{ inputs.extra_args }}
+        PARAM_FAIL_ON: ${{ inputs.fail_on }}
+        PARAM_JUNIT: ${{ inputs.junit }}
+        PARAM_MERGE_BASE: ${{ inputs.merge_base }}
+        PARAM_OUTPUT_DIR: ${{ inputs.output_dir }}
+        PARAM_REPORT_NAME: ${{ inputs.report_name }}
+        PARAM_REPORT_ONLY: ${{ inputs.report_only }}
+        PARAM_RUN_RECORD: ${{ inputs.run_record }}
+        PARAM_SEVERITY_LEVELS: ${{ inputs.severity_levels }}
+        PARAM_SPECS: ${{ inputs.specs }}
+        PARAM_WARN_IGNORE: ${{ inputs.warn_ignore }}
+      run: >-
+        bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/breaking.sh"
+        "SCRIPT_OPENAPI_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/openapi.sh"
+    - name: Upload the reports
+      if: always() && (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ steps.artifact.outputs.name }}
+        path: ${{ inputs.output_dir }}
+        if-no-files-found: ignore

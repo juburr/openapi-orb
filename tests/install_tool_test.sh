@@ -1,0 +1,391 @@
+#!/usr/bin/env bash
+#
+# Tests src/scripts/install_tool.sh, which installs Schemathesis with uv for
+# install_schemathesis. It runs through tests/run_command.sh, so with the
+# command's YAML defaults, its locks and the shared helpers, against a
+# stand-in uv that records every call and the UV_* variables it sees, and
+# stand-in interpreters that answer what the install asks them. It checks:
+#
+#   - a listed release installs from its lock with --require-hashes, wheels
+#     only, ignoring uv configuration, into a new environment that replaces
+#     the old one only after the tool runs in it
+#   - strict refuses an unlisted release before running uv; known_versions
+#     and false install unverified, with a warning
+#   - the job's UV_* variables are cleared but the network ones
+#   - python: a uv-managed CPython (default 3.14), system, or a path, which
+#     must be CPython 3.11 to 3.14
+#   - index_url and python_install_mirror are checked and passed on
+#   - the script that runs the tool, the install record, and the PATH
+#   - a version from an environment variable, with a stand-in CircleCI CLI
+#     and without one (a real circleci on the PATH, as on CircleCI's images,
+#     is hidden from every run)
+#
+# Run from a checkout:
+#   bash tests/install_tool_test.sh
+
+# The checks run small scripts in single quotes, which expand their own
+# arguments.
+# shellcheck disable=SC2016
+
+set -uo pipefail
+
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+WORK=$(mktemp -d)
+trap 'rm -rf "${WORK}"' EXIT
+STUB="${WORK}/stub"
+HOME_DIR="${WORK}/home"
+BIN="${HOME_DIR}/.openapi-orb/bin"
+mkdir -p "${STUB}" "${WORK}/path" "${WORK}/cli"
+
+# The PATH without a real circleci CLI, which CircleCI's images have: a
+# directory that holds one is replaced by one with links to everything else
+# in it, so each run decides whether there is a CLI.
+CLEAN_PATH=""
+IFS=: read -ra PATH_DIRS <<< "${PATH}"
+for dir in "${PATH_DIRS[@]}"; do
+    [[ -d "${dir}" ]] || continue
+    if [[ -e "${dir}/circleci" ]]; then
+        shadow=$(mktemp -d "${WORK}/path.XXXXXX")
+        for file in "${dir}"/*; do
+            [[ "${file##*/}" == circleci ]] || ln -s "${file}" "${shadow}/"
+        done
+        dir=${shadow}
+    fi
+    CLEAN_PATH+="${CLEAN_PATH:+:}${dir}"
+done
+
+# Like `circleci env subst`, expands $NAME and ${NAME} references, from stdin.
+cat > "${WORK}/cli/circleci" << 'EOF'
+#!/usr/bin/env bash
+if [[ "$*" != "env subst" ]]; then
+    echo "circleci stub: expected 'env subst' with the value on stdin, got: $*" >&2
+    exit 1
+fi
+input=$(cat)
+output=""
+re='^([^$]*)\$(\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))(.*)$'
+while [[ "${input}" =~ ${re} ]]; do
+    name=${BASH_REMATCH[3]:-${BASH_REMATCH[4]}}
+    output+="${BASH_REMATCH[1]}${!name-}"
+    input=${BASH_REMATCH[5]}
+done
+printf '%s' "${output}${input}"
+EOF
+chmod +x "${WORK}/cli/circleci"
+
+# A stand-in interpreter: the platform question install_tool.sh asks, and a
+# tool's --version, from the "installed" file the stand-in uv writes in the
+# environment it belongs to.
+cat > "${STUB}/python" << 'EOF'
+#!/usr/bin/env bash
+if [[ "$1" == -I && "$2" == -c ]]; then
+    echo "${STUB_PYTHON_IMPL:-CPython} ${STUB_PYTHON_VERSION:-3.14.10}"
+    exit 0
+fi
+if [[ "$1" == -I && "$2" == -m ]]; then
+    dir=$(cd "$(dirname "$0")/.." && pwd)
+    read -r name version < "${dir}/installed" || exit 1
+    printf '%s %s\n' "${name}" "${STUB_REPORT_VERSION:-${version}}"
+    exit "${STUB_RUN_EXIT:-0}"
+fi
+echo "python stub: unexpected: $*" >&2
+exit 1
+EOF
+# The stand-in uv.
+cat > "${STUB}/uv" << 'EOF'
+#!/usr/bin/env bash
+set +o errexit +o nounset +o pipefail +o xtrace
+{
+    printf 'call:'
+    printf ' %s' "$@"
+    printf '\n'
+    env | grep '^UV_' | sort | sed 's/^/  env /'
+    printf '  cwd %s\n' "${PWD}"
+} >> "${STUB_DIR}/uv.log"
+args=("$@")
+# opt FLAG: the value after FLAG.
+opt() {
+    local i
+    for ((i = 0; i < ${#args[@]}; i++)); do
+        if [[ "${args[i]}" == "$1" ]]; then
+            printf '%s\n' "${args[i + 1]}"
+            return 0
+        fi
+    done
+    return 1
+}
+python_dir="${UV_PYTHON_INSTALL_DIR}/cpython-3.14.10-linux-x86_64-gnu/bin"
+case "$1 $2" in
+    "--version "*)
+        echo "uv 0.13.6"
+        exit 0
+        ;;
+    "python install")
+        [[ -n "${STUB_PYTHON_INSTALL_EXIT:-}" ]] && { echo "error: no download for that request" >&2; exit "${STUB_PYTHON_INSTALL_EXIT}"; }
+        mkdir -p "${python_dir}"
+        cp "${STUB_DIR}/python" "${python_dir}/python3.14"
+        exit 0
+        ;;
+    "python find")
+        echo "${python_dir}/python3.14"
+        exit 0
+        ;;
+    "venv "*)
+        dest=${args[${#args[@]} - 1]}
+        mkdir -p "${dest}/bin"
+        cp "${STUB_DIR}/python" "${dest}/bin/python"
+        printf 'home = %s\n' "$(dirname "$(opt --python)")" > "${dest}/pyvenv.cfg"
+        exit 0
+        ;;
+    "pip install")
+        venv=$(dirname "$(dirname "$(opt --python)")")
+        if lock=$(opt -r); then
+            cp "${lock}" "${STUB_DIR}/lock.txt"
+            spec=$(grep -E "^${STUB_TOOL}==" "${lock}" | head -n 1)
+        else
+            spec=${args[${#args[@]} - 1]}
+        fi
+        [[ -n "${STUB_INSTALL_EXIT:-}" ]] && { echo "error: hash mismatch for some-package" >&2; exit "${STUB_INSTALL_EXIT}"; }
+        spec=${spec%% *}
+        name=${spec%%==*}
+        printf '%s %s\n' "${name%%[*}" "${spec#*==}" > "${venv}/installed"
+        exit 0
+        ;;
+    "pip list")
+        echo '[{"name":"stub-package","version":"1.0"}]'
+        exit 0
+        ;;
+esac
+echo "uv stub: unexpected: $*" >&2
+exit 1
+EOF
+chmod +x "${STUB}/python" "${STUB}/uv"
+# A python3 for python: system.
+cp "${STUB}/python" "${WORK}/path/python3"
+
+FAILURES=0
+RC=0
+OUTPUT=""
+
+# run COMMAND [NAME=VALUE ...] [-- VAR=value ...]: runs COMMAND's script
+# through tests/run_command.sh with HOME in the work directory, the stand-in
+# uv in install_path, and the environment settings after --.
+run() {
+    local command=$1 params=() envs=()
+    shift
+    while [[ $# -gt 0 && "$1" != -- ]]; do
+        params+=("$1")
+        shift
+    done
+    if [[ $# -gt 0 ]]; then
+        shift
+        envs=("$@")
+    fi
+    rm -f "${STUB}/uv.log" "${STUB}/lock.txt"
+    : > "${STUB}/uv.log"
+    : > "${WORK}/bash_env"
+    mkdir -p "${BIN}"
+    cp "${STUB}/uv" "${BIN}/uv"
+    OUTPUT=$(env HOME="${HOME_DIR}" PATH="${WORK}/path:${CLEAN_PATH}" BASH_ENV="${WORK}/bash_env" STUB_DIR="${STUB}" \
+        ${envs[@]+"${envs[@]}"} bash "${ROOT}/tests/run_command.sh" "${command}" ${params[@]+"${params[@]}"} 2>&1)
+    RC=$?
+}
+
+check() {
+    local description=$1
+    shift
+    if "$@"; then
+        printf 'ok: %s\n' "${description}"
+    else
+        printf 'FAIL: %s\n' "${description}"
+        while IFS= read -r line; do
+            printf '    | %s\n' "${line}"
+        done <<< "${OUTPUT}"
+        sed 's/^/    uv: /' "${STUB}/uv.log"
+        FAILURES=$((FAILURES + 1))
+    fi
+}
+rc_is() { [[ "${RC}" -eq "$1" ]]; }
+said() { grep -qF -- "$1" <<< "${OUTPUT}"; }
+not_said() { ! said "$1"; }
+# script_lacks TEXT: the script's output lacks TEXT; run_command.sh's own
+# first line, which echoes the parameters, is left out.
+script_lacks() { ! grep -v '^Running scripts/' <<< "${OUTPUT}" | grep -qF -- "$1"; }
+called() { grep -q -- "^call: $1" "${STUB}/uv.log"; }
+not_called() { ! called "$1"; }
+call_has() { grep "^call: $1" "${STUB}/uv.log" | grep -qF -- "$2"; }
+call_lacks() { ! call_has "$1" "$2"; }
+uv_env() { grep -qx -- "  env $1" "${STUB}/uv.log"; }
+no_uv_env() { ! grep -q -- "^  env $1=" "${STUB}/uv.log"; }
+exported() {
+    # shellcheck disable=SC2016 # expanded by the clean shell, not here
+    [[ "$(env -i bash -c 'source "$1"; printf "%s" "${!2}"' _ "${WORK}/bash_env" "$1")" == "$2" ]]
+}
+record() { jq -r "$1" "${BIN}/.$2.install.json" 2> /dev/null; }
+# block TOOL VERSION: the lock for TOOL VERSION in its locks.txt.
+block() {
+    awk -v start="# >>> $1 $2 >>>" -v end="# <<< $1 $2 <<<" '$0 == start { on = 1; next } $0 == end { on = 0 } on' \
+        "${ROOT}/src/install/$1/locks.txt"
+}
+
+echo "=== a listed release, from its lock"
+run install_schemathesis -- STUB_TOOL=schemathesis
+check "schemathesis's default release installs" rc_is 0
+check "uv installs CPython 3.14 first" call_has "python install" "--no-bin --managed-python 3.14"
+check "into the orb's own directory" uv_env "UV_PYTHON_INSTALL_DIR=${HOME_DIR}/.openapi-orb/python"
+check "keeping the archive in the cached directory" uv_env "UV_PYTHON_CACHE_DIR=${HOME_DIR}/.cache/openapi-orb/python"
+check "creates the environment with that Python" call_has "venv" "--no-python-downloads --relocatable --quiet --python ${HOME_DIR}/.openapi-orb/python/cpython-3.14.10-linux-x86_64-gnu/bin/python3.14"
+check "installs with --require-hashes from a lock" call_has "pip install" "--require-hashes -r "
+check "wheels only, every installed file checked" call_has "pip install" "--only-binary :all: --strict --link-mode copy"
+check "from PyPI, with no keyring" call_has "pip install" "--default-index https://pypi.org/simple --keyring-provider disabled"
+check "ignoring uv configuration" call_has "pip install" "--no-config"
+check "and UV_NO_CONFIG is set besides" uv_env "UV_NO_CONFIG=1"
+check "with a cache of its own" grep -q '^  env UV_CACHE_DIR=/tmp' "${STUB}/uv.log"
+check "the lock is the 4.32.4 block of src/install/schemathesis/locks.txt" diff -q <(block schemathesis 4.32.4) "${STUB}/lock.txt"
+check "uv runs in a directory with no project files" bash -c '! grep "^  cwd " "$1" | grep -qv "^  cwd /tmp"' _ "${STUB}/uv.log"
+check "says how many packages it pins" said "Installing schemathesis 4.32.4 from its lock (28 packages"
+check "the script that runs it is in install_path" test -x "${BIN}/schemathesis"
+check "and runs Schemathesis's CLI with python -I" grep -q "^exec '${HOME_DIR}/.openapi-orb/venvs/schemathesis/bin/python' -I -m schemathesis.cli \"\$@\"$" "${BIN}/schemathesis"
+check "which works" bash -c '[[ "$("$1" --version)" == "schemathesis 4.32.4" ]]' _ "${BIN}/schemathesis"
+check "the environment is in venvs/schemathesis" test -f "${HOME_DIR}/.openapi-orb/venvs/schemathesis/pyvenv.cfg"
+check "no staging directory is left" bash -c '[[ -z "$(find "$1" -maxdepth 1 -name ".schemathesis.*")" ]]' _ "${HOME_DIR}/.openapi-orb/venvs"
+check "the install record says it was verified" test "$(record .verified schemathesis)" = true
+check "with the lock's SHA-256" test "$(record .lock_sha256 schemathesis)" = "$(block schemathesis 4.32.4 | sha256sum | awk '{ print $1 }')"
+check "the Python" test "$(record '.python.version + " " + .python.source' schemathesis)" = "3.14.10 uv"
+check "uv's version" test "$(record .uv schemathesis)" = "0.13.6"
+check "what is installed" test "$(record '.packages[0].name' schemathesis)" = "stub-package"
+check "and the SHA-512 of the script" test "$(record .binary_sha512 schemathesis)" = "$(sha512sum "${BIN}/schemathesis" | awk '{ print $1 }')"
+check "install_path goes on the PATH of later steps" grep -q "^export PATH=${BIN}:" "${WORK}/bash_env"
+
+printf 'old\n' > "${HOME_DIR}/.openapi-orb/venvs/schemathesis/old-marker"
+run install_schemathesis version=4.32.3 verify_checksums=known_versions -- STUB_TOOL=schemathesis
+check "another release replaces the environment" rc_is 0
+check "and nothing of the old one stays" test ! -e "${HOME_DIR}/.openapi-orb/venvs/schemathesis/old-marker"
+check "the script runs the new one" bash -c '[[ "$("$1" --version)" == "schemathesis 4.32.3" ]]' _ "${BIN}/schemathesis"
+
+run install_schemathesis -- STUB_TOOL=schemathesis STUB_REPORT_VERSION=9.9.9
+check "a tool that reports another version fails" rc_is 1
+check "saying so" said "schemathesis reports 'schemathesis 9.9.9', not version 4.32.4"
+check "and leaves the environment there was" bash -c '[[ "$("$1" --version)" == "schemathesis 4.32.3" ]]' _ "${BIN}/schemathesis"
+run install_schemathesis -- STUB_TOOL=schemathesis STUB_RUN_EXIT=1
+check "a tool that doesn't run fails the install" rc_is 1
+check "saying so" said "schemathesis 4.32.4 was installed, but doesn't run"
+run install_schemathesis -- STUB_TOOL=schemathesis STUB_INSTALL_EXIT=1
+check "a failed uv pip install fails the install" rc_is 1
+check "with uv's error" said "hash mismatch for some-package"
+check "and leaves the environment there was" bash -c '[[ "$("$1" --version)" == "schemathesis 4.32.3" ]]' _ "${BIN}/schemathesis"
+
+echo "=== verify_checksums"
+run install_schemathesis version=9.9.9 -- STUB_TOOL=schemathesis
+check "strict refuses a release without a lock" rc_is 1
+check "naming the ones it has" said "It has locks for: 4.32.4."
+check "before running uv" not_called "python"
+run install_schemathesis version=v4.32.4 -- STUB_TOOL=schemathesis
+check "a leading v is ignored" rc_is 0
+run install_schemathesis version=9.9.9 verify_checksums=known_versions -- STUB_TOOL=schemathesis
+check "known_versions installs a release without a lock" rc_is 0
+check "warning that it isn't verified" said "WARN: This orb has no lock for schemathesis 9.9.9"
+check "without --require-hashes" call_lacks "pip install" "--require-hashes"
+check "but still wheels only" call_has "pip install" "--only-binary :all:"
+check "the requirement is the release" call_has "pip install" " schemathesis==9.9.9"
+check "and the record says it wasn't verified" test "$(record .verified schemathesis)" = false
+run install_schemathesis version=4.32.4 verify_checksums=false -- STUB_TOOL=schemathesis
+check "false installs a listed release unverified too" rc_is 0
+check "with a warning" said "WARN: verify_checksums is false"
+run install_schemathesis version='$ORB_TEST_VERSION' -- STUB_TOOL=schemathesis ORB_TEST_VERSION=4.32.4 PATH="${WORK}/cli:${WORK}/path:${CLEAN_PATH}"
+check "a version from an environment variable is expanded by the CircleCI CLI" rc_is 0
+check "to the release it names" said "Installing schemathesis 4.32.4 from its lock"
+run install_schemathesis version='$ORB_TEST_VERSION' -- STUB_TOOL=schemathesis ORB_TEST_VERSION=4.32.4
+check "without the CLI it is taken as is" rc_is 1
+check "and refused, since it isn't a release" said "version must be a schemathesis release, such as 1.2.3, not '\$ORB_TEST_VERSION'"
+
+echo "=== the job's uv settings"
+run install_schemathesis -- STUB_TOOL=schemathesis UV_CONFIG_FILE=/tmp/evil.toml UV_PYTHON_DOWNLOADS_JSON_URL=https://evil.example/d.json \
+    UV_INDEX_URL=https://evil.example/simple UV_VENV_SEED=1 UV_HTTP_TIMEOUT=90 UV_NATIVE_TLS=1 VIRTUAL_ENV=/somewhere
+check "installs" rc_is 0
+check "UV_CONFIG_FILE, which beats --no-config, never reaches uv" no_uv_env UV_CONFIG_FILE
+check "nor UV_PYTHON_DOWNLOADS_JSON_URL, which replaces the Python hashes" no_uv_env UV_PYTHON_DOWNLOADS_JSON_URL
+check "nor UV_INDEX_URL" no_uv_env UV_INDEX_URL
+check "nor UV_VENV_SEED" no_uv_env UV_VENV_SEED
+check "but the network settings do" uv_env "UV_HTTP_TIMEOUT=90"
+check "all of them" uv_env "UV_NATIVE_TLS=1"
+
+echo "=== python"
+run install_schemathesis python=3.12 -- STUB_TOOL=schemathesis STUB_PYTHON_VERSION=3.12.9
+check "another CPython minor version" rc_is 0
+check "is asked of uv" call_has "python install" "--managed-python 3.12"
+run install_schemathesis python=system -- STUB_TOOL=schemathesis STUB_PYTHON_VERSION=3.11.4
+check "system uses the python3 on the PATH" rc_is 0
+check "without asking uv for one" not_called "python install"
+check "creating the environment with it" call_has "venv" "--python ${WORK}/path/python3"
+check "and the record says so" test "$(record '.python.source + " " + .python.version' schemathesis)" = "system 3.11.4"
+run install_schemathesis python="${WORK}/path/python3" -- STUB_TOOL=schemathesis
+check "an interpreter's path works too" rc_is 0
+check "recorded as a path" test "$(record .python.source schemathesis)" = path
+run install_schemathesis python=system -- STUB_TOOL=schemathesis STUB_PYTHON_IMPL=PyPy
+check "an interpreter that isn't CPython is refused" rc_is 1
+check "saying so" said "but schemathesis needs CPython 3.11 to 3.14"
+run install_schemathesis python=system -- STUB_TOOL=schemathesis STUB_PYTHON_VERSION=3.10.14
+check "CPython 3.10, which Schemathesis no longer supports, is refused" rc_is 1
+check "before installing anything" not_called "venv"
+run install_schemathesis python=system -- STUB_TOOL=schemathesis STUB_PYTHON_VERSION=3.15.0
+check "CPython 3.15, which the locks don't cover, is refused" rc_is 1
+for value in 3.10 3.15 3 latest python3.14; do
+    run install_schemathesis python="${value}" -- STUB_TOOL=schemathesis
+    check "python: ${value} is refused" rc_is 1
+    check "saying what it can be" said "ERROR: python must be 3.11 to 3.14"
+    check "before running uv" not_called "python"
+done
+run install_schemathesis python="${WORK}/missing/python3" -- STUB_TOOL=schemathesis
+check "a path that doesn't run is refused" rc_is 1
+check "saying so" said "does not run as a Python interpreter"
+run install_schemathesis -- STUB_TOOL=schemathesis STUB_PYTHON_INSTALL_EXIT=2
+check "a Python uv can't install fails the step" rc_is 1
+check "with uv's error" said "no download for that request"
+
+echo "=== mirrors"
+run install_schemathesis index_url=https://artifactory.example/api/pypi/pypi/simple -- STUB_TOOL=schemathesis
+check "index_url is the index uv downloads from" call_has "pip install" "--default-index https://artifactory.example/api/pypi/pypi/simple"
+check "and the record names it" test "$(record .index schemathesis)" = "https://artifactory.example/api/pypi/pypi/simple"
+for value in http://pypi.example/simple pypi.example/simple; do
+    run install_schemathesis index_url="${value}" -- STUB_TOOL=schemathesis
+    check "index_url ${value} is refused" rc_is 1
+    check "saying it must be https" said "index_url must be a https:// URL"
+done
+run install_schemathesis index_url=https://user:s3cret@pypi.example/simple -- STUB_TOOL=schemathesis
+check "credentials in index_url are refused" rc_is 1
+check "without printing them" script_lacks "s3cret"
+run install_schemathesis python_install_mirror=file:///srv/python-build-standalone -- STUB_TOOL=schemathesis
+check "a file:// Python mirror" rc_is 0
+check "reaches uv as UV_PYTHON_INSTALL_MIRROR" uv_env "UV_PYTHON_INSTALL_MIRROR=file:///srv/python-build-standalone"
+run install_schemathesis python_install_mirror=http://mirror.example/python -- STUB_TOOL=schemathesis
+check "an http:// Python mirror is refused" rc_is 1
+check "saying what it can be" said "python_install_mirror must be a https:// or file:// URL"
+run install_schemathesis caching=false -- STUB_TOOL=schemathesis
+check "caching false keeps the Python archive in a temporary directory" grep -q '^  env UV_PYTHON_CACHE_DIR=/tmp' "${STUB}/uv.log"
+
+echo "=== install_path and uv"
+run install_schemathesis install_path=relative -- STUB_TOOL=schemathesis
+check "a relative install_path is refused" rc_is 1
+check "saying so" said "install_path must be an absolute path"
+run install_schemathesis install_path="${WORK}/elsewhere" -- STUB_TOOL=schemathesis
+check "an install_path without uv is refused" rc_is 1
+check "saying to run install_uv there first" said "There is no uv in ${WORK}/elsewhere"
+mkdir -p "${WORK}/elsewhere"
+cp "${STUB}/uv" "${WORK}/elsewhere/uv"
+run install_schemathesis install_path="${WORK}/elsewhere" -- STUB_TOOL=schemathesis
+check "another install_path with uv in it" rc_is 0
+check "gets the script" test -x "${WORK}/elsewhere/schemathesis"
+check "and goes on the PATH" grep -q "^export PATH=${WORK}/elsewhere:" "${WORK}/bash_env"
+mkdir -p "${HOME_DIR}/tools"
+cp "${STUB}/uv" "${HOME_DIR}/tools/uv"
+run install_schemathesis "install_path=~/tools" -- STUB_TOOL=schemathesis
+check "a leading ~ in install_path is the home directory, as install_uv reads it" test -x "${HOME_DIR}/tools/schemathesis"
+run install_schemathesis -- STUB_TOOL=schemathesis PATH="${BIN}:${WORK}/path:${CLEAN_PATH}"
+check "an install_path already on the PATH isn't added again" bash -c '! grep -q "^export PATH=" "$1"' _ "${WORK}/bash_env"
+
+if [[ "${FAILURES}" -gt 0 ]]; then
+    echo "${FAILURES} install check(s) failed."
+    exit 1
+fi
+echo "All install checks passed."

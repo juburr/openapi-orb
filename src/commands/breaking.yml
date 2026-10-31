@@ -1,0 +1,164 @@
+description: >
+  Finds the changes to OpenAPI documents that break their clients, with
+  oasdiff: each document in the working tree against itself at a base
+  revision, by default where this branch left the remote's default branch
+  (or, on GitHub Actions, a pull request's base branch), or against
+  base_file. oasdiff reads the base from git itself, $refs to other files
+  included, so the checkout needs the base commit (actions/checkout:
+  fetch-depth: 0). Breaking changes at or above fail_on fail the step unless
+  report_only is true; a comparison that couldn't run, or a document that
+  isn't OpenAPI 3, fails it either way. A document the base doesn't have is
+  new, and passes. Writes the changes as JSON, a Markdown changelog for a
+  pull request, SARIF (for GitHub code scanning) and JUnit. Run install
+  (tools: oasdiff) first.
+parameters:
+  working_dir:
+    type: string
+    default: "."
+    description: The directory to run in. specs, base_spec, base_file and the policy files are relative to it.
+  specs:
+    type: string
+    default: ""
+    description: >
+      The documents to check, separated by commas or spaces, each a path or a
+      glob relative to the working directory. Leave empty for the first of
+      openapi.yaml, openapi.yml, openapi.json, swagger.yaml, swagger.yml and
+      swagger.json in the working directory. Environment variables are
+      expanded.
+  base_ref:
+    type: string
+    default: ""
+    description: >
+      The branch, tag or commit to compare with, such as origin/main or
+      v1.4.0. Leave empty for origin/$GITHUB_BASE_REF on a GitHub Actions
+      pull request, or else the remote's default branch (origin/HEAD,
+      origin/main or origin/master). Environment variables are expanded.
+  merge_base:
+    type: boolean
+    default: true
+    description: >
+      Compare with the merge base of base_ref and HEAD, where this branch
+      left it, so the changes others made to base_ref since don't count. Set
+      it to false to compare with base_ref itself, as for a release tag.
+  base_spec:
+    type: string
+    default: ""
+    description: >
+      Where the document was at the base, relative to the working directory,
+      when it has moved since. Leave empty for the same path. Only with one
+      document. Environment variables are expanded.
+  base_file:
+    type: string
+    default: ""
+    description: >
+      A file to compare with instead of a git revision, such as the document
+      a published API serves, downloaded in an earlier step. Only with one
+      document, and without base_ref. Environment variables are expanded.
+  fail_on:
+    type: enum
+    enum: ["error", "warn"]
+    default: error
+    description: >
+      The lowest level of breaking change that is a finding: error (oasdiff's
+      ERR, a change that breaks clients) or warn (WARN, one that may).
+  severity_levels:
+    type: string
+    default: ""
+    description: >
+      An oasdiff severity levels file: one "<rule id> <err|warn|info|none>" per
+      line, to change a check's level or turn it off. Environment variables
+      are expanded.
+  err_ignore:
+    type: string
+    default: ""
+    description: >
+      An oasdiff ignore file for ERR changes: one line per change to accept,
+      with its method and path and the change's text. Environment variables
+      are expanded.
+  warn_ignore:
+    type: string
+    default: ""
+    description: >
+      An oasdiff ignore file for WARN changes, as err_ignore. Environment
+      variables are expanded.
+  extra_args:
+    type: string
+    default: ""
+    description: >
+      Further options for oasdiff's changelog, such as --flatten-allof or
+      --match-path. They are split like shell words, but nothing in them is
+      expanded or run. Options the command sets itself, and those that fetch
+      or upload, are refused. Environment variables are expanded.
+  report_name:
+    type: string
+    default: breaking
+    description: >
+      The reports' file name without its extension: <report_name>.json (every
+      change, with its level and the document it is in), <report_name>.md
+      (the changelog) and <report_name>.sarif (the breaking changes).
+      Letters, digits, '.', '_' and '-'.
+  output_dir:
+    type: string
+    default: /tmp/openapi-reports
+    description: >
+      Absolute path of the directory to write the reports into. Environment
+      variables are not expanded, since the path is also passed to
+      store_artifacts and store_test_results.
+  junit:
+    type: boolean
+    default: true
+    description: >
+      Write the findings as JUnit (output_dir/junit/<report_name>.xml), and
+      store it with store_test_results for CircleCI's Tests tab.
+  run_record:
+    type: boolean
+    default: false
+    description: >
+      Also write a run record (<report_name>.run-record.json): what was
+      checked, with which tool and settings, and what it found.
+  report_only:
+    type: boolean
+    default: false
+    description: >
+      Report findings without failing the step, to adopt the check
+      gradually. A check that couldn't run, or that checked nothing, still
+      fails it.
+  store_artifacts:
+    type: boolean
+    default: true
+    description: Store output_dir as job artifacts under openapi-reports/, including when the step fails.
+steps:
+  - run:
+      name: oasdiff (<< parameters.report_name >>)
+      working_directory: << parameters.working_dir >>
+      environment:
+        PARAM_BASE_FILE: << parameters.base_file >>
+        PARAM_BASE_REF: << parameters.base_ref >>
+        PARAM_BASE_SPEC: << parameters.base_spec >>
+        PARAM_ERR_IGNORE: << parameters.err_ignore >>
+        PARAM_EXTRA_ARGS: << parameters.extra_args >>
+        PARAM_FAIL_ON: << parameters.fail_on >>
+        PARAM_JUNIT: << parameters.junit >>
+        PARAM_MERGE_BASE: << parameters.merge_base >>
+        PARAM_OUTPUT_DIR: << parameters.output_dir >>
+        PARAM_REPORT_NAME: << parameters.report_name >>
+        PARAM_REPORT_ONLY: << parameters.report_only >>
+        PARAM_RUN_RECORD: << parameters.run_record >>
+        PARAM_SEVERITY_LEVELS: << parameters.severity_levels >>
+        PARAM_SPECS: << parameters.specs >>
+        PARAM_WARN_IGNORE: << parameters.warn_ignore >>
+        SCRIPT_OPENAPI_LIB: << include(scripts/lib/openapi.sh) >>
+      command: << include(scripts/breaking.sh) >>
+  - when:
+      condition: << parameters.junit >>
+      steps:
+        - store_test_results:
+            path: << parameters.output_dir >>/junit/<< parameters.report_name >>.xml
+            when: always
+  - when:
+      condition: << parameters.store_artifacts >>
+      steps:
+        - store_artifacts:
+            path: << parameters.output_dir >>
+            destination: openapi-reports
+            when: always

@@ -1,0 +1,58 @@
+name: Bundle an OpenAPI document with vacuum
+description: >
+  Bundles an OpenAPI document split across files into one with vacuum, inlining
+  every $ref to another file (and, with remote references, which vacuum follows
+  by default, to a URL), so the document can be published, served or given to a
+  tool that reads one file. The bundle must be a document whose every remaining
+  $ref points inside it, at something that is there; a reference vacuum couldn't
+  resolve fails the step, and output is only written then. Run the install
+  action (tools: vacuum) first. The GitHub Actions twin of the orb's bundle
+  command.
+author: juburr
+
+inputs:
+  working_dir:
+    description: >
+      The directory to run in. spec and output are relative to it.
+    default: .
+  spec:
+    description: >
+      The document to bundle, such as openapi.yaml, whose $refs are relative to it.
+    required: true
+  output:
+    description: >
+      The file to write the bundled document to, such as dist/openapi.yaml. Its
+      directory is created if needed; it can't be spec itself.
+    required: true
+  format:
+    description: >
+      The bundled document's format. auto is JSON for an output ending in .json,
+      else YAML.
+    default: auto
+  composed:
+    description: >
+      Move every external component into the document's components section, and
+      point the references there, instead of inlining each one where it is used.
+    default: "false"
+  extra_args:
+    description: >
+      Further options for vacuum bundle, such as --remote=false or --ext-refs. They
+      are split like shell words, but nothing in them is expanded or run. Options
+      the command sets itself are refused.
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: vacuum bundle
+      shell: bash
+      working-directory: ${{ inputs.working_dir }}
+      env:
+        PARAM_COMPOSED: ${{ inputs.composed }}
+        PARAM_EXTRA_ARGS: ${{ inputs.extra_args }}
+        PARAM_FORMAT: ${{ inputs.format }}
+        PARAM_OUTPUT: ${{ inputs.output }}
+        PARAM_SPEC: ${{ inputs.spec }}
+      run: >-
+        bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/bundle.sh"
+        "SCRIPT_OPENAPI_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/openapi.sh"
