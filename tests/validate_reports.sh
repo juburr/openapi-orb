@@ -25,7 +25,12 @@ ARGS=(--sarif-schema "${SCHEMA}" --kinds "${VALIDATE_KINDS:-sarif,junit,record}"
 if python3 -c 'import jsonschema' 2> /dev/null; then
     python3 "${ROOT}/tests/validate_reports.py" "${ARGS[@]}"
 elif command -v uv > /dev/null; then
-    uv run --no-config --no-project --python python3 --with jsonschema==4.26.0 \
+    # The job's python3, or a Python uv downloads when the image has none.
+    PYTHON=()
+    if command -v python3 > /dev/null; then
+        PYTHON=(--python python3)
+    fi
+    uv run --no-config --no-project ${PYTHON[@]+"${PYTHON[@]}"} --with jsonschema==4.26.0 \
         python "${ROOT}/tests/validate_reports.py" "${ARGS[@]}"
 else
     echo "ERROR: validating the reports needs python3 with jsonschema, or uv." >&2

@@ -147,8 +147,9 @@ jobs:
       - image: cimg/base:current
     steps:
       - checkout
+      # uv runs validate-reports' jsonschema, which cimg/base doesn't have.
       - openapi-orb/install:
-          tools: vacuum
+          tools: vacuum,uv
       - openapi-orb/lint:
           specs: tests/fixtures/api/openapi.yaml
           run_record: true
@@ -210,8 +211,9 @@ jobs:
       - image: cimg/base:current
     steps:
       - checkout
+      # uv runs validate-reports' jsonschema, which cimg/base doesn't have.
       - openapi-orb/install:
-          tools: oasdiff
+          tools: oasdiff,uv
       - api-repository:
           document: openapi-v2.yaml
       - run:
