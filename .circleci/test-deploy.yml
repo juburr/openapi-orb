@@ -226,7 +226,8 @@ jobs:
             jq -e 'any(.[]; .id == "api-removed-without-deprecation" and .operation == "DELETE")' /tmp/breaking/breaking.json
             jq -e 'any(.[]; .level == 3 and (.text | test("sku")))' /tmp/breaking/breaking.json
             jq -e 'any(.[]; .level == 1 and .path == "/health")' /tmp/breaking/breaking.json
-            grep -q 'api-removed-without-deprecation' /tmp/breaking/breaking.md
+            grep -qxF '### DELETE /items/{id}' /tmp/breaking/breaking.md
+            grep -qF ':warning: api removed without deprecation' /tmp/breaking/breaking.md
       - openapi-orb/breaking:
           working_dir: /tmp/api
           report_only: true
