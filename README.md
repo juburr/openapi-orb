@@ -98,7 +98,7 @@ flowchart LR
 version: 2.1
 
 orbs:
-  openapi: juburr/openapi-orb@0.1.0
+  openapi: juburr/openapi-orb@0.2.0
 
 jobs:
   openapi:
@@ -131,9 +131,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # breaking reads the base branch from git
-      - uses: juburr/openapi-orb/actions/install@v0.1.0
-      - uses: juburr/openapi-orb/actions/lint@v0.1.0
-      - uses: juburr/openapi-orb/actions/breaking@v0.1.0
+      - uses: juburr/openapi-orb/actions/install@v0.2.0
+      - uses: juburr/openapi-orb/actions/lint@v0.2.0
+      - uses: juburr/openapi-orb/actions/breaking@v0.2.0
       - uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
@@ -266,7 +266,7 @@ Every parameter that names a value expands environment variables, except `output
 | `python` | `3.14` | `3.11` to `3.14` for a CPython uv downloads, `system`, or an interpreter's absolute path |
 | `index_url` | `https://pypi.org/simple` | The package index to install Schemathesis from |
 | `python_install_mirror` | | A mirror of uv's Python downloads, `https://` or `file://` |
-| `download_base_url` | | A mirror of GitHub Releases, in place of `https://github.com` |
+| `download_base_url` | | A mirror of GitHub Releases, in place of `https://github.com`. A mirror that needs a login gets the `.netrc` entry for its host; see [Mirrors That Need a Login](#-mirrors-that-need-a-login). |
 | `caching` | `true` | Cache the verified releases and the Python archive between jobs |
 | `install_path` | `~/.openapi-orb/bin` | Where the tools go, added to the `PATH` ahead of any an image ships |
 | `verify_checksums` | `strict` | `strict`, `known_versions` or `false` (see [Checksum Verification](#-checksum-verification)) |
@@ -278,7 +278,7 @@ Every parameter that names a value expands environment variables, except `output
 | `version` | `0.35.1` | The vacuum release, from 0.30.0 |
 | `verify_checksums` | `strict` | `strict`, `known_versions` or `false` |
 | `install_path` | `~/.openapi-orb/bin` | Directory for `vacuum`, added to the `PATH` |
-| `download_base_url` | | An https mirror of GitHub Releases |
+| `download_base_url` | | An https mirror of GitHub Releases. A mirror that needs a login gets the `.netrc` entry for its host; see [Mirrors That Need a Login](#-mirrors-that-need-a-login). |
 | `caching` | `true` | Cache the verified release between jobs |
 
 ### `openapi/install_oasdiff`
@@ -374,16 +374,16 @@ Every command has a composite action of the same name, with the same inputs and 
 
 | Action | Command |
 |---|---|
-| `juburr/openapi-orb/actions/install@v0.1.0` | `install` |
-| `juburr/openapi-orb/actions/install_vacuum@v0.1.0` | `install_vacuum` |
-| `juburr/openapi-orb/actions/install_oasdiff@v0.1.0` | `install_oasdiff` |
-| `juburr/openapi-orb/actions/install_uv@v0.1.0` | `install_uv` |
-| `juburr/openapi-orb/actions/install_schemathesis@v0.1.0` | `install_schemathesis` |
-| `juburr/openapi-orb/actions/lint@v0.1.0` | `lint` |
-| `juburr/openapi-orb/actions/bundle@v0.1.0` | `bundle` |
-| `juburr/openapi-orb/actions/breaking@v0.1.0` | `breaking` |
-| `juburr/openapi-orb/actions/drift@v0.1.0` | `drift` |
-| `juburr/openapi-orb/actions/contract_test@v0.1.0` | `contract_test` |
+| `juburr/openapi-orb/actions/install@v0.2.0` | `install` |
+| `juburr/openapi-orb/actions/install_vacuum@v0.2.0` | `install_vacuum` |
+| `juburr/openapi-orb/actions/install_oasdiff@v0.2.0` | `install_oasdiff` |
+| `juburr/openapi-orb/actions/install_uv@v0.2.0` | `install_uv` |
+| `juburr/openapi-orb/actions/install_schemathesis@v0.2.0` | `install_schemathesis` |
+| `juburr/openapi-orb/actions/lint@v0.2.0` | `lint` |
+| `juburr/openapi-orb/actions/bundle@v0.2.0` | `bundle` |
+| `juburr/openapi-orb/actions/breaking@v0.2.0` | `breaking` |
+| `juburr/openapi-orb/actions/drift@v0.2.0` | `drift` |
+| `juburr/openapi-orb/actions/contract_test@v0.2.0` | `contract_test` |
 
 What one action exports, later steps see, as with CircleCI's `BASH_ENV`. A few differences:
 
@@ -393,7 +393,7 @@ What one action exports, later steps see, as with CircleCI's `BASH_ENV`. A few d
 - **The reports are uploaded as an artifact** named `openapi-reports-<report_name>-<random>`. JUnit stays in `output_dir/junit/` for a test reporter action.
 - **The install actions cache with `actions/cache`**, keyed as on CircleCI.
 - **Start the API in the background** before `contract_test`, such as with `nohup ./server &`, since a step has no `background: true`.
-- **Pin the actions to a commit SHA** for the strongest guarantee: `juburr/openapi-orb/actions/lint@<sha> # v0.1.0`.
+- **Pin the actions to a commit SHA** for the strongest guarantee: `juburr/openapi-orb/actions/lint@<sha> # v0.2.0`.
 
 ## 🔒 Secure by Design
 
@@ -410,6 +410,30 @@ What one action exports, later steps see, as with CircleCI's `BASH_ENV`. A few d
 - **Documents.** vacuum lints OpenAPI 2.0, 3.0, 3.1 and 3.2 (and AsyncAPI 3). oasdiff compares OpenAPI 3.0, 3.1 and 3.2. Schemathesis tests OpenAPI 2.0 to 3.2.
 - **Schemathesis.** CPython 3.11 to 3.14; its aarch64 wheels need glibc 2.28 or newer, or musl.
 - **CI.** CircleCI tests every command with the real tools, and the installs on amd64 and arm64; GitHub Actions tests every action the same way.
+
+## 🔑 Mirrors That Need a Login
+
+`download_base_url` points the install at an internal mirror, such as an Artifactory remote repository. When the mirror needs a login, the install takes it from the entry for the mirror's host in the `.netrc` file (`NETRC`, or `~/.netrc`), which an earlier step writes, such as from a context's variables. Artifactory takes an access token as the password.
+
+```yaml
+- run:
+    name: Log In to the Mirror
+    command: |
+      umask 077
+      printf 'machine %s login %s password %s\n' artifactory.example.com "${ARTIFACTORY_USER}" "${ARTIFACTORY_TOKEN}" >> ~/.netrc
+```
+
+`printf` is a shell builtin, so the token never reaches a command line.
+
+How the login is kept to the mirror:
+
+- **One entry, in a private file.** The install copies the first complete entry for the mirror's host, alone, into a file only the job's user can read, and gives that file to curl. curl never reads the rest of your `.netrc`: not a `default` entry, not an entry without a password (curl 7.76.0 to 8.11.1 could send a password on to a host the server redirects to, CVE-2024-11053 and CVE-2025-0167, when the `.netrc` held either), and not a token for another host, such as `github.com`.
+- **Only for the mirror.** curl gets the file only for URLs under the mirror. Downloads from anywhere else get no login.
+- **Never past a redirect.** When the mirror redirects a download to another host, such as the cloud storage an Artifactory keeps its files in, that host gets no login, even when a `~/.curlrc` says `location-trusted`.
+- **curl only.** wget reads every entry in `~/.netrc` and can't be limited to one, so an install that would send a mirror login with wget fails and asks for curl.
+- **Out of the log.** The log names the `.netrc` file and the host, never the login. A `.netrc` other users can read is reported.
+
+An entry the install can't use as curl would, one without a login or password or with a quoted value, is reported, and the mirror is then asked without a login. A mirror that refuses a download without one is reported with the entry it needs.
 
 ## 🔐 Checksum Verification
 

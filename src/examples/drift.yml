@@ -8,7 +8,7 @@ description: >
 usage:
   version: 2.1
   orbs:
-    openapi: juburr/openapi-orb@0.1.0
+    openapi: juburr/openapi-orb@0.2.0
   jobs:
     drift:
       docker:
